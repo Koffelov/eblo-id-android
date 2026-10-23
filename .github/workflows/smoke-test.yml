@@ -52,18 +52,25 @@ jobs:
           sudo udevadm trigger --name-match=kvm
 
       - name: Start emulator
+        timeout-minutes: 20
         run: |
           echo "$ANDROID_HOME/platform-tools" >> "$GITHUB_PATH"
           export PATH="$ANDROID_HOME/platform-tools:$PATH"
+          # avdmanager and emulator must agree on where AVDs live (XDG_CONFIG_HOME is set on runners).
+          export ANDROID_AVD_HOME="$HOME/.android/avd"
+          echo "ANDROID_AVD_HOME=$ANDROID_AVD_HOME" >> "$GITHUB_ENV"
+          mkdir -p "$ANDROID_AVD_HOME" smoke-results
           sdk="$ANDROID_HOME/cmdline-tools/latest/bin"
-          yes | "$sdk/sdkmanager" --install emulator "$SYSTEM_IMAGE" > /dev/null
+          yes | "$sdk/sdkmanager" --install emulator "$SYSTEM_IMAGE" | tail -n 3
           echo no | "$sdk/avdmanager" create avd --force -n smoke -k "$SYSTEM_IMAGE" -d pixel_6
-          mkdir -p smoke-results
+          "$ANDROID_HOME/emulator/emulator" -list-avds
           nohup "$ANDROID_HOME/emulator/emulator" -avd smoke -no-window -no-audio -no-boot-anim \
             -no-snapshot -gpu swiftshader_indirect -camera-back none -camera-front none -memory 4096 \
             > smoke-results/emulator.log 2>&1 &
-          adb wait-for-device
-          timeout 600 bash -c 'until [ "$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d "\r")" = "1" ]; do sleep 5; done'
+          if ! timeout 180 adb wait-for-device; then tail -n 40 smoke-results/emulator.log; exit 1; fi
+          if ! timeout 600 bash -c 'until [ "$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d "\r")" = "1" ]; do sleep 5; done'; then
+            tail -n 40 smoke-results/emulator.log; exit 1
+          fi
           adb shell settings put global window_animation_scale 0
           adb shell settings put global transition_animation_scale 0
           adb shell settings put global animator_duration_scale 0
@@ -75,6 +82,7 @@ jobs:
           adb shell dumpsys package com.google.android.webview | grep -m1 versionName || true
 
       - name: Run smoke test
+        timeout-minutes: 20
         run: |
           pip install --quiet websocket-client
           bash .github/smoke/smoke.sh \
