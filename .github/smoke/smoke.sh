@@ -57,16 +57,21 @@ wait_page() {
 jsonget() { python3 -c "import json,sys; d=json.load(sys.stdin); print($1)"; }
 
 # ---- expected data, straight from the site ----
-FEED_TITLE="$(curl -fsS 'https://eblo.id/api/feed?scope=public&sort=best&type=all&time=today&offset=0&limit=1' \
-  | jsonget "next((f['title'] for f in d['files'] if f.get('title')), '')")"
-for code in $(curl -fsS https://eblo.id/ | grep -oE 'href="/[A-Za-z0-9]{7}"' | sed -E 's/href="\/(.*)"/\1/' \
-    | grep -vE '^(consent|privacy|uploads|sitemap)$' | awk '!seen[$0]++'); do
-  post_json="$(curl -fsS "https://eblo.id/api/public/post/$code" || true)"
+log "site from this runner: home $(curl -s -o /dev/null -w '%{http_code}' https://eblo.id/), feed api $(curl -s -o /dev/null -w '%{http_code}' 'https://eblo.id/api/feed?limit=1')"
+FEED_JSON="$(curl -sS 'https://eblo.id/api/feed?scope=public&sort=best&type=all&time=today&offset=0&limit=15')"
+FEED_TITLE="$(printf '%s' "$FEED_JSON" | jsonget "d['files'][0]['title']" 2>/dev/null || true)"
+CODE="" AUTHOR="" TITLE=""
+for code in $(printf '%s' "$FEED_JSON" | jsonget "' '.join(f['short_code'] for f in d['files'] if len(f.get('title') or '') >= 4)" 2>/dev/null); do
+  post_json="$(curl -sS "https://eblo.id/api/public/post/$code" || true)"
   TITLE="$(printf '%s' "$post_json" | jsonget "d.get('title') or ''" 2>/dev/null || true)"
   AUTHOR="$(printf '%s' "$post_json" | jsonget "d['author']['login']" 2>/dev/null || true)"
   if [ "${#TITLE}" -ge 4 ] && [ -n "$AUTHOR" ]; then CODE="$code"; break; fi
 done
 log "feed title=$FEED_TITLE | post=$CODE author=$AUTHOR title=$TITLE"
+if [ -z "$CODE" ] || [ -z "$FEED_TITLE" ]; then
+  log "Could not get test data from eblo.id: $(printf '%s' "$FEED_JSON" | head -c 300)"
+  exit 1
+fi
 
 # ============ Part A: the signed release APK, as the user installs it ============
 log "Installing release APK"
