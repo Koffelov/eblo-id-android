@@ -19,7 +19,13 @@ final class Session {
             Pattern.compile("window\\.CURRENT_USER_LOGIN=\\((null|\"(?:[^\"\\\\]|\\\\.)*\")\\)");
     private static final Pattern CSRF =
             Pattern.compile("window\\.__CSRF_TOKEN=\\((\"(?:[^\"\\\\]|\\\\.)*\")\\)");
+    private static final Pattern TURNSTILE_KEY = Pattern.compile("window\\.TURNSTILE_SITE_KEY=\\(\"([^\"]+)\"\\)");
     private static final List<Runnable> LISTENERS = new ArrayList<>();
+
+    /** Bumped after the user changes their avatar, so cached copies are not shown. */
+    static volatile long avatarVersion;
+    /** Cloudflare Turnstile site key the site embeds in every page (fallback: the current one). */
+    static volatile String turnstileKey = "0x4AAAAAACcl-P8-SugE5N-9";
 
     private static volatile boolean known;
     private static volatile boolean authenticated;
@@ -81,6 +87,8 @@ final class Session {
         login = l.find() ? jsonString(l.group(1)) : null;
         Matcher c = CSRF.matcher(html);
         if (c.find()) csrf = jsonString(c.group(1));
+        Matcher t = TURNSTILE_KEY.matcher(html);
+        if (t.find()) turnstileKey = t.group(1);
         boolean changed = !known || wasLoggedIn != loggedIn()
                 || (oldLogin == null ? login != null : !oldLogin.equals(login));
         known = true;

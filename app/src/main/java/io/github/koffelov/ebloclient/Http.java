@@ -34,6 +34,11 @@ final class Http {
         int code;
         String body;
         String location;
+        final Map<String, String> headers = new java.util.HashMap<>();
+
+        String header(String name) {
+            return headers.get(name.toLowerCase(java.util.Locale.ROOT));
+        }
     }
 
     private Http() {
@@ -80,6 +85,11 @@ final class Http {
 
     static Response request(String method, String path, String contentType, byte[] body)
             throws IOException {
+        return request(method, path, contentType, body, null);
+    }
+
+    static Response request(String method, String path, String contentType, byte[] body,
+                            Map<String, String> extraHeaders) throws IOException {
         String url = absolute(path);
         String currentMethod = method;
         byte[] currentBody = body;
@@ -101,6 +111,11 @@ final class Http {
                     c.setRequestProperty("X-CSRF-Token", Session.csrf());
                     c.setRequestProperty("Origin", BASE);
                     c.setRequestProperty("Referer", BASE + "/");
+                }
+                if (extraHeaders != null) {
+                    for (Map.Entry<String, String> h : extraHeaders.entrySet()) {
+                        c.setRequestProperty(h.getKey(), h.getValue());
+                    }
                 }
                 if (currentBody != null) {
                     c.setDoOutput(true);
@@ -125,6 +140,11 @@ final class Http {
                 Response r = new Response();
                 r.code = code;
                 r.location = url;
+                for (Map.Entry<String, List<String>> h : c.getHeaderFields().entrySet()) {
+                    if (h.getKey() != null && !h.getValue().isEmpty()) {
+                        r.headers.put(h.getKey().toLowerCase(java.util.Locale.ROOT), h.getValue().get(0));
+                    }
+                }
                 r.body = in == null ? "" : new String(readAll(in), StandardCharsets.UTF_8);
                 return r;
             } finally {

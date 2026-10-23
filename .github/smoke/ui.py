@@ -26,6 +26,14 @@ def centre(node):
 
 
 cmd, path, text = sys.argv[1], sys.argv[2], sys.argv[3].strip().lower()
+if cmd == "findstart":
+    # content-desc / text that starts with the raw (unstripped) prefix
+    prefix = sys.argv[3].lower()
+    for n in nodes(path):
+        if any(l.lower().startswith(prefix) for l in labels(n)):
+            print(*centre(n))
+            sys.exit(0)
+    sys.exit(1)
 if cmd == "has":
     sys.exit(0 if any(text in l.lower() for n in nodes(path) for l in labels(n)) else 1)
 if cmd in ("find", "findsub"):

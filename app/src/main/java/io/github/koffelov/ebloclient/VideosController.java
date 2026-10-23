@@ -58,7 +58,11 @@ final class VideosController {
         titles.addView(Ui.text(activity, "Предложка видео на стримы Братишкина", 15, Ui.INK3));
         titleRow.addView(titles, Ui.lpWeight());
         TextView suggest = Ui.button(activity, "Предложить", true);
-        suggest.setOnClickListener(v -> WebActivity.open(activity, Http.BASE + "/videos", "Предложить видео"));
+        suggest.setCompoundDrawablesRelativeWithIntrinsicBounds(R.drawable.ic_add, 0, 0, 0);
+        suggest.setCompoundDrawablePadding(Ui.dp(4));
+        suggest.setCompoundDrawableTintList(android.content.res.ColorStateList.valueOf(0xFF111111));
+        suggest.setContentDescription("Предложить видео");
+        suggest.setOnClickListener(v -> SuggestVideoActivity.start(activity));
         titleRow.addView(suggest);
         head.addView(titleRow);
         HorizontalScrollView scroll = new HorizontalScrollView(activity);
@@ -173,6 +177,34 @@ final class VideosController {
         chips.addView(chip, Ui.margins(Ui.lp(-2, -2), 0, 0, 8, 0));
     }
 
+    private void vote(Models.Video v) {
+        if (!Session.loggedIn()) {
+            new android.app.AlertDialog.Builder(activity)
+                    .setTitle("Нужен вход")
+                    .setMessage("Войдите через Twitch, чтобы голосовать за видео")
+                    .setPositiveButton("Войти", (d, w) -> WebActivity.login(activity))
+                    .setNegativeButton("Отмена", null)
+                    .show();
+            return;
+        }
+        final boolean remove = v.voted;
+        v.voted = !remove;
+        v.likes += remove ? -1 : 1;
+        adapter.notifyDataSetChanged();
+        Http.run(() -> Api.voteVideo(v.id, remove), (updated, error) -> {
+            if (activity.isDestroyed()) return;
+            if (error != null) {
+                v.voted = remove;
+                v.likes += remove ? 1 : -1;
+                Ui.toast(activity, Ui.errorText(activity, error));
+            } else {
+                v.voted = updated.voted;
+                v.likes = updated.likes;
+            }
+            adapter.notifyDataSetChanged();
+        });
+    }
+
     private final class Adapter extends BaseAdapter {
         @Override
         public int getCount() {
@@ -218,8 +250,15 @@ final class VideosController {
                 title.setMaxLines(2);
                 title.setEllipsize(TextUtils.TruncateAt.END);
                 body.addView(title);
+                LinearLayout metaRow = Ui.row(activity);
                 TextView meta = Ui.text(activity, 15, Ui.INK3);
-                body.addView(meta, Ui.margins(Ui.lp(-1, -2), 0, 4, 0, 0));
+                metaRow.addView(meta, Ui.lpWeight());
+                TextView like = Ui.text(activity, 17, Ui.INK2);
+                like.setCompoundDrawablesRelativeWithIntrinsicBounds(R.drawable.ic_heart, 0, 0, 0);
+                like.setCompoundDrawablePadding(Ui.dp(6));
+                like.setPadding(Ui.dp(12), Ui.dp(6), Ui.dp(12), Ui.dp(6));
+                metaRow.addView(like);
+                body.addView(metaRow, Ui.margins(Ui.lp(-1, -2), 0, 4, 0, 0));
                 card.addView(body);
                 outer.addView(card);
             }
@@ -234,9 +273,16 @@ final class VideosController {
             ((TextView) body.getChildAt(0)).setText(v.title);
             StringBuilder meta = new StringBuilder();
             if (!v.channel.isEmpty()) meta.append(v.channel);
-            if (v.likes > 0) meta.append(meta.length() > 0 ? " · " : "").append("♥ ").append(Ui.count(v.likes));
             if (!v.authorName.isEmpty()) meta.append(meta.length() > 0 ? " · " : "").append("предложил ").append(v.authorName);
-            ((TextView) body.getChildAt(1)).setText(meta);
+            LinearLayout metaRow = (LinearLayout) body.getChildAt(1);
+            ((TextView) metaRow.getChildAt(0)).setText(meta);
+            TextView like = (TextView) metaRow.getChildAt(1);
+            like.setText(Ui.count(v.likes));
+            like.setTextColor(v.voted ? Ui.DANGER : Ui.INK2);
+            like.setCompoundDrawableTintList(android.content.res.ColorStateList.valueOf(v.voted ? Ui.DANGER : Ui.INK3));
+            like.setBackground(Ui.ripple(Ui.round(v.voted ? 0x26EF9282 : Ui.SURFACE_RAISED, 16, 0)));
+            like.setContentDescription(v.voted ? "Убрать голос" : "Голосовать за видео");
+            like.setOnClickListener(x -> vote(v));
             card.setOnClickListener(x -> {
                 if (v.url != null && !v.url.isEmpty()) Router.openExternal(activity, Uri.parse(v.url));
             });

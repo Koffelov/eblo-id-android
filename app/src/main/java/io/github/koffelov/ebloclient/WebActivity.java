@@ -44,9 +44,9 @@ import java.util.Locale;
 import java.util.Set;
 
 /**
- * The few things done on eblo.id's own pages inside the app: Twitch login (the OAuth redirect is
- * fixed to eblo.id, so it must finish in this cookie jar), creating a post (the site's uploader,
- * CSRF and Cloudflare check), and anything the native screens don't cover.
+ * Web pages inside the app, used only for the Twitch login (the OAuth redirect is fixed to
+ * eblo.id, so it must finish in this cookie jar) and when the user explicitly asks to open a page
+ * on the site (or a screen falls back to it because the site's API changed).
  */
 public class WebActivity extends BaseActivity {
     static final String EXTRA_URL = "url";
@@ -54,7 +54,6 @@ public class WebActivity extends BaseActivity {
     static final String EXTRA_MODE = "mode";
     static final int MODE_PAGE = 0;
     static final int MODE_LOGIN = 1;
-    static final int MODE_NEW_POST = 2;
     static final int REQUEST_LOGIN = 41;
     private static final int REQUEST_FILES = 1;
 
@@ -91,13 +90,6 @@ public class WebActivity extends BaseActivity {
                 .putExtra(EXTRA_TITLE, "Вход через Twitch")
                 .putExtra(EXTRA_MODE, MODE_LOGIN);
         a.startActivityForResult(i, REQUEST_LOGIN);
-    }
-
-    static void newPost(Context c) {
-        c.startActivity(new Intent(c, WebActivity.class)
-                .putExtra(EXTRA_URL, Http.BASE + "/new")
-                .putExtra(EXTRA_TITLE, "Новый пост")
-                .putExtra(EXTRA_MODE, MODE_NEW_POST));
     }
 
     @Override
@@ -332,8 +324,8 @@ public class WebActivity extends BaseActivity {
     }
 
     /**
-     * Decides whether an eblo.id link should leave the web screen: a finished login or a published
-     * post returns to the native app; links to posts and profiles open native screens.
+     * Decides whether an eblo.id link should leave the web screen: a finished login returns to the
+     * app, and links that have a native screen (posts, profiles, feed, new post, videos) open it.
      */
     private boolean leaveFor(Uri uri) {
         String path = uri.getPath() == null ? "/" : uri.getPath();
@@ -341,14 +333,8 @@ public class WebActivity extends BaseActivity {
             finishLogin();
             return true;
         }
-        if (mode == MODE_NEW_POST) {
-            if ("/new".equals(path) || path.startsWith("/uploaders")) return false;
-            String code = Router.postCode(uri);
-            if (code != null) PostActivity.start(this, code);
-            finish();
-            return true;
-        }
-        if (Router.postCode(uri) != null || path.startsWith("/@") || "/".equals(path)) {
+        if (Router.postCode(uri) != null || path.startsWith("/@") || "/".equals(path)
+                || "/new".equals(path) || "/videos".equals(path) || "/search".equals(path)) {
             Router.open(this, uri);
             return true;
         }

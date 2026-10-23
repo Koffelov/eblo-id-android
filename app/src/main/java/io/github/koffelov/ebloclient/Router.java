@@ -57,7 +57,11 @@ final class Router {
             } else if ("/search".equals(path)) {
                 SearchActivity.start(c, uri.getQueryParameter("q"));
             } else if ("/new".equals(path)) {
-                WebActivity.newPost(c);
+                NewPostActivity.start(c);
+            } else if ("/videos".equals(path)) {
+                Intent i = new Intent(c, MainActivity.class);
+                i.setFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+                c.startActivity(i.putExtra(MainActivity.EXTRA_VIDEOS, true));
             } else {
                 WebActivity.open(c, uri.buildUpon().scheme("https").build().toString(), null);
             }

@@ -214,10 +214,12 @@ final class Models {
         int duration;
         int likes;
         long published;
+        boolean voted;
 
         static Video from(JSONObject o) {
             Video v = new Video();
             v.id = o.optLong("id");
+            v.voted = o.optBoolean("has_voted");
             v.title = str(o, "title");
             v.url = str(o, "url");
             String preview = str(o, "preview_url");
@@ -250,6 +252,19 @@ final class Models {
         final List<String> badges = new ArrayList<>();
         String twitch;
         String telegram;
+        Boolean showSocial;
+    }
+
+    static final class Badge {
+        Long id;
+        String name = "";
+        String icon;
+        boolean active;
+    }
+
+    static final class UploadLimits {
+        long maxBytes = 200L * 1024 * 1024;
+        final java.util.Set<String> extensions = new java.util.HashSet<>();
     }
 
     static final class Page<T> {

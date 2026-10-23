@@ -22,11 +22,22 @@ final class Api {
     static final class ApiException extends IOException {
         final int code;
         final boolean captcha;
+        final JSONObject body;
 
         ApiException(int code, String message, boolean captcha) {
+            this(code, message, captcha, null);
+        }
+
+        ApiException(int code, String message, boolean captcha, JSONObject body) {
             super(message == null || message.isEmpty() ? "HTTP " + code : message);
             this.code = code;
             this.captcha = captcha;
+            this.body = body;
+        }
+
+        /** Worth retrying: server hiccup, rate limit, conflict while chunks settle. */
+        boolean transientError() {
+            return code >= 500 && code != 507 || code == 429 || code == 409 || code == 499 || code == 0;
         }
     }
 
@@ -56,20 +67,41 @@ final class Api {
     }
 
     private static JSONObject parse(Http.Response r) throws IOException, JSONException {
+        // The uploader asks for "status tunnelling": the real status comes in X-Origin-Status.
+        int code = r.code;
+        String tunnelled = r.header("X-Origin-Status");
+        if (tunnelled != null) {
+            try {
+                code = Integer.parseInt(tunnelled.trim());
+            } catch (NumberFormatException ignored) {
+                // Keep the HTTP status.
+            }
+        }
         String text = r.body == null ? "" : r.body.trim();
-        JSONObject json = text.startsWith("{") ? new JSONObject(text) : null;
-        if (r.code >= 400 || json == null) {
-            String message = json == null ? null : json.optString("error", null);
+        JSONObject json = null;
+        if (text.startsWith("{")) {
+            try {
+                json = new JSONObject(text);
+            } catch (JSONException ignored) {
+                // Not JSON after all.
+            }
+        }
+        if (code >= 400 || json == null) {
+            String message = json == null ? null : json.optString("error", json.optString("message", null));
             boolean captcha = json != null && json.optBoolean("captcha_required");
-            if (r.code == 401) message = "Нужно войти в аккаунт";
-            throw new ApiException(r.code, message, captcha);
+            if (code == 401) message = "Нужно войти в аккаунт";
+            if (code == 413) message = "Файл слишком большой для сайта";
+            throw new ApiException(code, message, captcha, json);
         }
         if (json.has("success") && !json.optBoolean("success")) {
-            throw new ApiException(r.code, json.optString("error", "Ошибка сайта"),
-                    json.optBoolean("captcha_required"));
+            throw new ApiException(code, json.optString("error", "Ошибка сайта"),
+                    json.optBoolean("captcha_required"), json);
         }
         return json;
     }
+
+    private static final java.util.Map<String, String> TUNNEL =
+            java.util.Collections.singletonMap("X-Status-Tunnel", "1");
 
     private static String enc(String s) {
         return Uri.encode(s == null ? "" : s);
@@ -178,6 +210,10 @@ final class Api {
     private static final Pattern FOLLOW_BTN = Pattern.compile("<(?:a|button)[^>]*profile-follow-btn[^>]*>([^<]*)<");
     private static final Pattern TWITCH = Pattern.compile("href=\"(https://(?:www\\.)?twitch\\.tv/[^\"]+)\"");
     private static final Pattern TELEGRAM = Pattern.compile("href=\"(https://t\\.me/[^\"]+)\"");
+    // Only the profile's own link block: the page footer also links to eblo.id's Telegram channel.
+    private static final Pattern LINKS_BLOCK =
+            Pattern.compile("class=\"(?:profile-links|platform-badges)\">(.*?)</div>", Pattern.DOTALL);
+    private static final Pattern SOCIAL_TOGGLE = Pattern.compile("<input[^>]*id=\"social-visibility-toggle\"[^>]*>");
 
     /** The profile header exists only as HTML on /@login. */
     static Models.Profile profile(String login) throws IOException {
@@ -203,8 +239,15 @@ final class Api {
         String follow = group(FOLLOW_BTN, html, "").trim().toLowerCase(java.util.Locale.ROOT);
         p.canFollow = !p.owner;
         p.isFollowing = follow.contains("отслеживаете") || follow.contains("отписаться");
-        p.twitch = group(TWITCH, html, null);
-        p.telegram = group(TELEGRAM, html, null);
+        Matcher links = LINKS_BLOCK.matcher(html);
+        String block = links.find() ? links.group(1) : "";
+        p.twitch = group(TWITCH, block, null);
+        p.telegram = group(TELEGRAM, block, null);
+        Matcher social = SOCIAL_TOGGLE.matcher(html);
+        if (social.find()) p.showSocial = social.group().contains(" checked");
+        if (p.owner && Session.avatarVersion > 0 && p.avatar != null) {
+            p.avatar += (p.avatar.contains("?") ? "&" : "?") + "v=" + Session.avatarVersion;
+        }
         return p;
     }
 
@@ -336,6 +379,146 @@ final class Api {
         JSONObject meta = json.optJSONObject("meta");
         result.hasMore = meta != null ? meta.optBoolean("has_next_page") : data.length() >= perPage;
         return result;
+    }
+
+    static Models.Video voteVideo(long id, boolean remove) throws IOException, JSONException {
+        JSONObject json = postJson(remove ? "/api/videos/unvote" : "/api/videos/vote", new JSONObject().put("id", id));
+        JSONObject data = json.optJSONObject("data");
+        if (data == null) throw new ApiException(200, "Неожиданный ответ сайта", false);
+        return Models.Video.from(data);
+    }
+
+    /** Suggests a video for the stream; returns the site's message. */
+    static String offerVideo(String url, java.util.List<Long> categories, String comment)
+            throws IOException, JSONException {
+        JSONArray ids = new JSONArray();
+        for (Long id : categories) ids.put(id.longValue());
+        JSONObject body = new JSONObject().put("url", url).put("category_ids", ids).put("comment", comment);
+        if (!categories.isEmpty()) body.put("category_id", categories.get(0).longValue());
+        JSONObject json = postJson("/api/videos/offer", body);
+        JSONObject notify = json.optJSONObject("notify");
+        String msg = notify == null ? "" : notify.optString("msg", "");
+        return msg.isEmpty() ? "Видео предложено" : msg;
+    }
+
+    // ---- new post: the site's chunked uploader (/api/uploads) ----
+
+    static final class UploadSession {
+        String id;
+        int chunks;
+        long chunkSize;
+    }
+
+    static Models.UploadLimits uploadLimits() throws IOException, JSONException {
+        JSONObject json = getJson("/api/public/upload-limits");
+        Models.UploadLimits l = new Models.UploadLimits();
+        l.maxBytes = json.optLong("max_bytes", l.maxBytes);
+        JSONArray ext = json.optJSONArray("extensions");
+        if (ext != null) for (int i = 0; i < ext.length(); i++) l.extensions.add(ext.optString(i).toLowerCase(java.util.Locale.ROOT));
+        return l;
+    }
+
+    static UploadSession createUpload(String name, long size, String mime) throws IOException, JSONException {
+        JSONObject body = new JSONObject().put("name", name).put("size", size).put("mime", mime);
+        JSONObject json = parse(Http.request("POST", "/api/uploads", "application/json",
+                body.toString().getBytes(StandardCharsets.UTF_8), TUNNEL));
+        UploadSession s = new UploadSession();
+        s.id = json.optString("id", "");
+        s.chunks = json.optInt("chunks", 1);
+        s.chunkSize = json.optLong("chunk_size", size);
+        if (s.id.isEmpty() || s.chunks <= 0 || s.chunkSize <= 0) {
+            throw new ApiException(200, "Сайт не начал загрузку", false, json);
+        }
+        return s;
+    }
+
+    static void putChunk(String id, int index, byte[] data) throws IOException, JSONException {
+        Http.Response r = Http.request("PUT", "/api/uploads/" + enc(id) + "/chunks/" + index,
+                "application/octet-stream", data, TUNNEL);
+        if (r.body == null || r.body.trim().isEmpty()) r.body = "{}";
+        parse(r);
+    }
+
+    static JSONObject completeUpload(java.util.List<String> ids, String title, String description,
+                                     boolean linkOnly, boolean blur, String uploadId)
+            throws IOException, JSONException {
+        JSONArray uploads = new JSONArray();
+        for (String id : ids) uploads.put(id);
+        JSONObject body = new JSONObject().put("uploads", uploads).put("title", title)
+                .put("description", description).put("private", linkOnly ? "1" : "0")
+                .put("blur", blur ? "1" : "0").put("upload_id", uploadId);
+        return parse(Http.request("POST", "/api/uploads/complete", "application/json",
+                body.toString().getBytes(StandardCharsets.UTF_8), TUNNEL));
+    }
+
+    static void cancelUpload(String id) {
+        try {
+            Http.request("DELETE", "/api/uploads/" + enc(id), null, null, TUNNEL);
+        } catch (IOException ignored) {
+            // The site expires unfinished uploads by itself.
+        }
+    }
+
+    static boolean verifyTurnstile(String token) throws IOException, JSONException {
+        JSONObject json = parse(Http.request("POST", "/api/security/turnstile/verify", "application/json",
+                new JSONObject().put("token", token).toString().getBytes(StandardCharsets.UTF_8)));
+        return json.optBoolean("success", true);
+    }
+
+    // ---- own profile and settings ----
+
+    static String uploadAvatar(byte[] jpeg) throws IOException, JSONException {
+        String boundary = "----eblo" + System.nanoTime();
+        java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+        out.write(("--" + boundary + "\r\nContent-Disposition: form-data; name=\"file\"; filename=\"avatar.jpg\"\r\n"
+                + "Content-Type: image/jpeg\r\n\r\n").getBytes(StandardCharsets.UTF_8));
+        out.write(jpeg);
+        out.write(("\r\n--" + boundary + "--\r\n").getBytes(StandardCharsets.UTF_8));
+        JSONObject json = parse(Http.request("POST", "/api/profile/upload-avatar",
+                "multipart/form-data; boundary=" + boundary, out.toByteArray()));
+        Session.avatarVersion = System.currentTimeMillis();
+        return Http.absolute(json.optString("avatar_url", ""));
+    }
+
+    static void deleteAvatar() throws IOException, JSONException {
+        postJson("/api/profile/delete-avatar", new JSONObject());
+        Session.avatarVersion = System.currentTimeMillis();
+    }
+
+    static java.util.List<Models.Badge> myBadges() throws IOException, JSONException {
+        JSONObject json = getJson("/settings/my_badges");
+        java.util.List<Models.Badge> list = new java.util.ArrayList<>();
+        JSONArray arr = json.optJSONArray("badges");
+        if (arr != null) {
+            for (int i = 0; i < arr.length(); i++) {
+                JSONObject o = arr.optJSONObject(i);
+                if (o == null) continue;
+                Models.Badge b = new Models.Badge();
+                b.id = o.optLong("id");
+                b.name = Models.str(o, "name");
+                b.icon = Http.absolute(Models.str(o, "icon"));
+                b.active = o.optBoolean("is_active");
+                list.add(b);
+            }
+        }
+        return list;
+    }
+
+    static void setBadge(Long id) throws IOException, JSONException {
+        postJson("/settings/set_active_badge", new JSONObject().put("badge_id", id == null ? JSONObject.NULL : id));
+    }
+
+    static boolean setSocialVisibility(boolean show) throws IOException, JSONException {
+        return postJson("/settings/social_visibility", new JSONObject().put("show_social_connections", show))
+                .optBoolean("show_social_connections", show);
+    }
+
+    static JSONObject notificationPrefs() throws IOException, JSONException {
+        return getJson("/settings/notification_prefs");
+    }
+
+    static void setNotificationPref(String key, boolean value) throws IOException, JSONException {
+        postJson("/settings/notification_prefs", new JSONObject().put(key, value));
     }
 
     // ---- account ----

@@ -37,7 +37,6 @@ final class ProfileController {
     private boolean hasMore = true;
     private boolean loading;
     private int generation;
-    private Runnable onLoggedOut;
 
     ProfileController(Activity activity, String login) {
         this.activity = activity;
@@ -75,10 +74,6 @@ final class ProfileController {
 
     View view() {
         return container;
-    }
-
-    void setOnLoggedOut(Runnable r) {
-        onLoggedOut = r;
     }
 
     void scrollToTop() {
@@ -180,13 +175,12 @@ final class ProfileController {
         LinearLayout buttons = Ui.row(activity);
         buttons.setPadding(Ui.dp(16), 0, Ui.dp(16), Ui.dp(14));
         if (profile.owner) {
-            TextView edit = Ui.button(activity, "Редактировать профиль", false);
-            edit.setOnClickListener(v -> WebActivity.open(activity, Http.BASE + "/@" + login, "Мой профиль"));
+            TextView edit = Ui.button(activity, "Профиль и настройки", false);
+            edit.setOnClickListener(v -> EditProfileActivity.start(activity));
             buttons.addView(edit, Ui.lpWeight());
-            TextView logout = Ui.button(activity, "Выйти", false);
-            logout.setTextColor(Ui.DANGER);
-            logout.setOnClickListener(v -> confirmLogout());
-            buttons.addView(logout, Ui.margins(Ui.lp(-2, -2), 10, 0, 0, 0));
+            TextView post = Ui.button(activity, "Новый пост", true);
+            post.setOnClickListener(v -> NewPostActivity.start(activity));
+            buttons.addView(post, Ui.margins(Ui.lp(-2, -2), 10, 0, 0, 0));
         } else if (profile.canFollow) {
             TextView follow = Ui.button(activity, "", !profile.isFollowing);
             styleFollow(follow);
@@ -245,25 +239,6 @@ final class ProfileController {
             if (profile.followers >= 0) profile.followers += following ? 1 : -1;
             styleFollow(b);
         });
-    }
-
-    private void confirmLogout() {
-        new AlertDialog.Builder(activity)
-                .setTitle("Выйти из аккаунта?")
-                .setPositiveButton("Выйти", (d, w) -> Http.run(() -> {
-                    Api.logout();
-                    return Boolean.TRUE;
-                }, (ok, error) -> {
-                    if (activity.isDestroyed()) return;
-                    if (error != null) {
-                        Ui.toast(activity, Ui.errorText(activity, error));
-                        return;
-                    }
-                    Ui.toast(activity, "Вы вышли из аккаунта");
-                    if (onLoggedOut != null) onLoggedOut.run();
-                }))
-                .setNegativeButton("Отмена", null)
-                .show();
     }
 
     private final class Adapter extends BaseAdapter {

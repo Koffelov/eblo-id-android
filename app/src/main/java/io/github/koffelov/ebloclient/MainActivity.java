@@ -20,6 +20,7 @@ import android.widget.TextView;
  */
 public class MainActivity extends BaseActivity {
     static final String EXTRA_FOLLOWING = "following";
+    static final String EXTRA_VIDEOS = "videos";
     private static final int TAB_FEED = 0;
     private static final int TAB_VIDEOS = 1;
     private static final int TAB_NEW = 2;
@@ -40,6 +41,7 @@ public class MainActivity extends BaseActivity {
     private TextView unreadBadge;
     private int currentTab = TAB_FEED;
     private long lastSessionRefresh;
+    private boolean resumedOnce;
     private final Runnable sessionListener = this::onSessionChanged;
 
     @Override
@@ -87,6 +89,7 @@ public class MainActivity extends BaseActivity {
             selectTab(TAB_FEED);
             feed.showFollowing(true);
         }
+        if (intent.getBooleanExtra(EXTRA_VIDEOS, false)) selectTab(TAB_VIDEOS);
         Uri data = intent.getData();
         if (Intent.ACTION_VIEW.equals(intent.getAction()) && data != null) {
             intent.setData(null);
@@ -105,8 +108,11 @@ public class MainActivity extends BaseActivity {
     @Override
     protected void onResume() {
         super.onResume();
-        // Picks up logins and logouts done in a web screen (for example on the "new post" page).
+        // Picks up logins and logouts done elsewhere in the app.
         if (SystemClock.elapsedRealtime() - lastSessionRefresh > 30_000) refreshSession();
+        // Back from "Профиль и настройки" or a new post: show the fresh profile.
+        if (resumedOnce && currentTab == TAB_ME && me != null) me.load(false);
+        resumedOnce = true;
     }
 
     @Override
@@ -216,7 +222,7 @@ public class MainActivity extends BaseActivity {
 
     private void selectTab(int index) {
         if (index == TAB_NEW) {
-            WebActivity.newPost(this);
+            NewPostActivity.start(this);
             return;
         }
         if (index == currentTab && pages[index].getVisibility() == View.VISIBLE) {
@@ -263,10 +269,6 @@ public class MainActivity extends BaseActivity {
         if (me == null || !login.equals(meLogin)) {
             if (me != null) meContainer.removeView(me.view());
             me = new ProfileController(this, login);
-            me.setOnLoggedOut(() -> {
-                updateMeTab();
-                showMe();
-            });
             meLogin = login;
             meContainer.addView(me.view(), 0, new FrameLayout.LayoutParams(-1, -1));
             me.load(true);

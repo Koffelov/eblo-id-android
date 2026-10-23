@@ -66,6 +66,8 @@ public class PostActivity extends BaseActivity {
 
     private MediaPlayer player;
     private ImageView playerButton;
+    private final List<VideoPlayer> players = new ArrayList<>();
+    private VideoPlayer fullscreenPlayer;
 
     static void start(Context c, String code) {
         c.startActivity(new Intent(c, PostActivity.class).putExtra(EXTRA_CODE, code));
@@ -190,6 +192,8 @@ public class PostActivity extends BaseActivity {
     // ---- post header ----
 
     private void buildHeader() {
+        for (VideoPlayer p : players) p.release();
+        players.clear();
         header.removeAllViews();
         int width = getResources().getDisplayMetrics().widthPixels;
 
@@ -304,15 +308,28 @@ public class PostActivity extends BaseActivity {
         if (m.isVideo()) {
             RatioFrame frame = new RatioFrame(this, 0.5625f);
             frame.setBackgroundColor(Color.BLACK);
-            ImageView thumb = new ImageView(this);
-            thumb.setScaleType(ImageView.ScaleType.CENTER_CROP);
-            Images.load(thumb, m.thumb != null ? m.thumb : post.thumb, width);
-            frame.addView(thumb, new FrameLayout.LayoutParams(-1, -1));
-            ImageView play = Ui.icon(this, R.drawable.ic_play_circle, 72, Color.WHITE);
-            play.setAlpha(0.9f);
-            frame.addView(play, new FrameLayout.LayoutParams(Ui.dp(72), Ui.dp(72), Gravity.CENTER));
-            frame.setForeground(Ui.ripple(null));
-            frame.setOnClickListener(v -> MediaActivity.video(this, m.url, post.title));
+            final String poster = m.thumb != null ? m.thumb : post.thumb;
+            final VideoPlayer[] self = new VideoPlayer[1];
+            self[0] = new VideoPlayer(this, m.url, poster, false, new VideoPlayer.Listener() {
+                @Override
+                public void onAspect(float heightToWidth) {
+                    frame.setRatio(Math.max(0.42f, Math.min(1.25f, heightToWidth)));
+                }
+
+                @Override
+                public void onFullscreen(int positionMs) {
+                    fullscreenPlayer = self[0];
+                    MediaActivity.video(PostActivity.this, m.url, poster, post.title, positionMs);
+                }
+
+                @Override
+                public void onPlay(VideoPlayer p) {
+                    releasePlayer();
+                    for (VideoPlayer other : players) if (other != p) other.pause();
+                }
+            });
+            players.add(self[0]);
+            frame.addView(self[0], new FrameLayout.LayoutParams(-1, -1));
             frame.setContentDescription("Видео " + m.name);
             LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2);
             lp.bottomMargin = Ui.dp(4);
@@ -393,11 +410,13 @@ public class PostActivity extends BaseActivity {
             player.pause();
             if (playerButton != null) playerButton.setImageResource(R.drawable.ic_play_circle);
         }
+        for (VideoPlayer p : players) p.pause();
     }
 
     @Override
     protected void onDestroy() {
         releasePlayer();
+        for (VideoPlayer p : players) p.release();
         super.onDestroy();
     }
 
@@ -472,6 +491,9 @@ public class PostActivity extends BaseActivity {
         if (requestCode == WebActivity.REQUEST_LOGIN) {
             updateComposer();
             if (resultCode == RESULT_OK) load();
+        }
+        if (requestCode == MediaActivity.REQUEST_VIDEO && fullscreenPlayer != null && data != null) {
+            fullscreenPlayer.startAt(data.getIntExtra(MediaActivity.EXTRA_POSITION, 0));
         }
     }
 
