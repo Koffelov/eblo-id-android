@@ -1,6 +1,7 @@
 """Evaluate JavaScript in the debug build's WebView over the DevTools protocol.
 
   cdp.py [--gesture] EXPRESSION   -> prints the JSON value of EXPRESSION
+  cdp.py --call METHOD PARAMS     -> prints the JSON result of a raw DevTools METHOD
 
 Expects `adb forward tcp:9222 localabstract:webview_devtools_remote_<pid>` to be set up.
 Only works with the debug APK (WebView debugging is disabled in release builds).
@@ -26,18 +27,21 @@ def target():
     raise SystemExit("no DevTools target")
 
 
-def evaluate(expression, gesture=False):
+def call(method, params):
     ws = websocket.create_connection(target(), timeout=60, suppress_origin=True)
     try:
-        ws.send(json.dumps({"id": 1, "method": "Runtime.evaluate", "params": {
-            "expression": expression, "returnByValue": True,
-            "awaitPromise": True, "userGesture": gesture}}))
+        ws.send(json.dumps({"id": 1, "method": method, "params": params}))
         while True:
             msg = json.loads(ws.recv())
             if msg.get("id") == 1:
-                break
+                return msg
     finally:
         ws.close()
+
+
+def evaluate(expression, gesture=False):
+    msg = call("Runtime.evaluate", {"expression": expression, "returnByValue": True,
+                                    "awaitPromise": True, "userGesture": gesture})
     result = msg.get("result", {})
     if "exceptionDetails" in result:
         raise SystemExit("JS error: " + json.dumps(result["exceptionDetails"])[:500])
@@ -45,5 +49,8 @@ def evaluate(expression, gesture=False):
 
 
 if __name__ == "__main__":
+    if sys.argv[1] == "--call":
+        print(json.dumps(call(sys.argv[2], json.loads(sys.argv[3])).get("result"), ensure_ascii=False))
+        sys.exit(0)
     args = [a for a in sys.argv[1:] if a != "--gesture"]
     print(json.dumps(evaluate(args[0], "--gesture" in sys.argv[1:]), ensure_ascii=False))

@@ -161,6 +161,21 @@ cdp_forward
 log "after Back from Twitch: $(js 'location.href')"
 check "debug: Back from the Twitch page returns to eblo.id" wait_page "eblo.id"
 
+log "The eblo.id session cookie (set by /login/twitch) must survive an app restart"
+has_session_cookie() {
+  js --call Network.getCookies '{"urls":["https://eblo.id/"]}' \
+    | python3 -c 'import json,sys; c=json.load(sys.stdin).get("cookies",[]); sys.exit(0 if any(x["name"]=="session" for x in c) else 1)'
+}
+check "debug: eblo.id session cookie is stored in the app" has_session_cookie
+adb shell input keyevent KEYCODE_HOME
+sleep 4
+adb shell am force-stop "$DBG"
+adb shell am start -W -n "$DBG/$PKG.MainActivity" >/dev/null
+sleep 6
+cdp_forward
+wait_page "eblo.id/" || true
+check "debug: session cookie survives force-stop and relaunch" has_session_cookie
+
 log "File input must open the Android system file picker"
 adb shell 'echo "smoke test" > /sdcard/Download/smoke-test.txt'
 adb shell am broadcast -a android.intent.action.MEDIA_SCANNER_SCAN_FILE -d file:///sdcard/Download/smoke-test.txt >/dev/null
