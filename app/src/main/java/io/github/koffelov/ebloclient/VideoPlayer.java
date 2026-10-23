@@ -54,9 +54,11 @@ final class VideoPlayer extends FrameLayout {
             if (video.isPlaying()) postDelayed(this, 250);
         }
     };
-    private final Runnable hideControls = () -> {
+    private final Runnable hideControls = this::hideIfPlaying;
+
+    private void hideIfPlaying() {
         if (video.isPlaying() && !dragging) setControlsVisible(false);
-    };
+    }
 
     VideoPlayer(Context c, String url, String posterUrl, boolean fullscreen, Listener listener) {
         super(c);
