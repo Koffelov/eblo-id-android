@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">eblo.id (неоф.)</string>
+    <string name="app_name_full">eblo.id — неофициальный клиент</string>
+
+    <string name="notice_title">Неофициальный клиент</string>
+    <string name="notice_text">Это неофициальное приложение. Оно не связано с eblo.id и его авторами и просто открывает сайт https://eblo.id в окне приложения.\n\nВход выполняется на страницах Twitch и eblo.id внутри приложения. Приложение не перехватывает и не сохраняет ваш пароль — сессия хранится в cookie сайта на телефоне.\n\nВозможности (лента, посты, вложения, комментарии) определяются самим сайтом.</string>
+    <string name="notice_ok">Понятно</string>
+
+    <string name="error_offline_title">Нет подключения к интернету</string>
+    <string name="error_offline_text">Проверьте Wi‑Fi или мобильные данные. Страница загрузится автоматически, когда сеть появится.</string>
+    <string name="error_generic_title">Не удалось открыть страницу</string>
+    <string name="error_generic_text">Сайт не ответил. Попробуйте ещё раз.</string>
+    <string name="retry">Повторить</string>
+
+    <string name="pick_files">Выберите файлы</string>
+    <string name="no_file_picker">Не найдено приложение для выбора файлов</string>
+    <string name="no_app_for_link">Нет приложения, чтобы открыть эту ссылку</string>
+    <string name="download_started">Скачивание: %1$s</string>
+    <string name="download_failed">Не удалось начать скачивание</string>
+    <string name="download_unsupported">Этот файл нельзя скачать из приложения</string>
+</resources>
