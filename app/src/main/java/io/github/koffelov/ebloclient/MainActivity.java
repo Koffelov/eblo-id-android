@@ -104,7 +104,7 @@ public class MainActivity extends Activity {
         setUpWebView();
 
         if (savedInstanceState == null || web.restoreState(savedInstanceState) == null) {
-            web.loadUrl(startUrl(getIntent()));
+            loadInApp(startUrl(getIntent()));
         }
         showNoticeOnce();
     }
@@ -114,7 +114,7 @@ public class MainActivity extends Activity {
         super.onNewIntent(intent);
         setIntent(intent);
         if (web != null && Intent.ACTION_VIEW.equals(intent.getAction()) && intent.getData() != null) {
-            web.loadUrl(startUrl(intent));
+            loadInApp(startUrl(intent));
         }
     }
 
@@ -445,11 +445,9 @@ public class MainActivity extends Activity {
         if ("https".equals(scheme) || "http".equals(scheme)) {
             if (isSiteUri(uri)) {
                 if ("http".equals(scheme)) {
-                    web.loadUrl(uri.buildUpon().scheme("https").build().toString());
+                    loadInApp(uri.buildUpon().scheme("https").build().toString());
                     return true;
                 }
-                // Login must finish in this WebView: Twitch redirects back to eblo.id, and the
-                // session cookie has to land in this cookie jar, not in an external browser.
                 inLoginFlow = isAuthPath(uri);
                 return false;
             }
@@ -467,6 +465,18 @@ public class MainActivity extends Activity {
         }
         openExternally(uri); // mailto:, tg:, tel:, market: and other apps
         return true;
+    }
+
+    /**
+     * Loads a URL that did not come from a click in the page (start, deep link, retry).
+     * Login must finish in this WebView: Twitch redirects back to eblo.id, and the session
+     * cookie has to land in this cookie jar, not in an external browser. So an eblo.id
+     * login URL starts the flow, any other eblo.id URL ends it, and other hosts keep it as is.
+     */
+    private void loadInApp(String url) {
+        Uri uri = Uri.parse(url);
+        if (isSiteUri(uri)) inLoginFlow = isAuthPath(uri);
+        web.loadUrl(url);
     }
 
     private static boolean isSiteUri(Uri uri) {
@@ -511,7 +521,7 @@ public class MainActivity extends Activity {
                 Uri fallbackUri = Uri.parse(fallback);
                 String scheme = lower(fallbackUri.getScheme());
                 if ("https".equals(scheme) || "http".equals(scheme)) {
-                    if (!route(fallbackUri)) web.loadUrl(fallback);
+                    if (!route(fallbackUri)) loadInApp(fallback);
                     return;
                 }
             }
@@ -584,7 +594,7 @@ public class MainActivity extends Activity {
         if (web == null) return;
         // The error screen stays up (with the progress bar over it) until the page loads.
         if (failedUrl != null) {
-            web.loadUrl(failedUrl);
+            loadInApp(failedUrl);
         } else {
             web.reload();
         }
