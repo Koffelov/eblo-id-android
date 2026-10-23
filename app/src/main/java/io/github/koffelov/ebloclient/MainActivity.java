@@ -1,111 +1,76 @@
 package io.github.koffelov.ebloclient;
 
-import android.annotation.SuppressLint;
-import android.annotation.TargetApi;
-import android.app.Activity;
 import android.app.AlertDialog;
-import android.app.DownloadManager;
-import android.content.ActivityNotFoundException;
-import android.content.ClipData;
 import android.content.Intent;
 import android.content.SharedPreferences;
-import android.content.pm.ApplicationInfo;
-import android.graphics.Bitmap;
-import android.graphics.Insets;
-import android.net.ConnectivityManager;
-import android.net.Network;
-import android.net.NetworkCapabilities;
+import android.content.res.ColorStateList;
 import android.net.Uri;
-import android.os.Build;
 import android.os.Bundle;
-import android.os.Environment;
+import android.os.SystemClock;
+import android.view.Gravity;
 import android.view.View;
-import android.view.ViewGroup;
-import android.view.WindowInsets;
-import android.view.WindowInsetsController;
-import android.webkit.CookieManager;
-import android.webkit.MimeTypeMap;
-import android.webkit.RenderProcessGoneDetail;
-import android.webkit.URLUtil;
-import android.webkit.ValueCallback;
-import android.webkit.WebChromeClient;
-import android.webkit.WebResourceError;
-import android.webkit.WebResourceRequest;
-import android.webkit.WebSettings;
-import android.webkit.WebView;
-import android.webkit.WebViewClient;
 import android.widget.FrameLayout;
-import android.widget.ProgressBar;
+import android.widget.ImageView;
+import android.widget.LinearLayout;
 import android.widget.TextView;
-import android.widget.Toast;
-import android.window.OnBackInvokedCallback;
-import android.window.OnBackInvokedDispatcher;
-
-import java.net.URISyntaxException;
-import java.util.ArrayList;
-import java.util.LinkedHashSet;
-import java.util.List;
-import java.util.Locale;
-import java.util.Set;
 
 /**
- * Unofficial eblo.id client: a thin shell around the site itself.
- *
- * eblo.id has no public API for the feed, profiles, posting or login, so the app shows the real
- * site and only adds what a browser tab would otherwise provide: Twitch login inside the same
- * cookie jar, the Android file picker, downloads, fullscreen video, back navigation and an
- * offline screen.
+ * Home: top bar, five tabs like the site's mobile tab bar (Лента, Видосы, +, Уведомления,
+ * Профиль), and the entry point for eblo.id links opened from other apps.
  */
-public class MainActivity extends Activity {
-    private static final String HOME_URL = "https://eblo.id/";
-    private static final String SITE_HOST = "eblo.id";
-    private static final int REQUEST_FILES = 1;
+public class MainActivity extends BaseActivity {
+    static final String EXTRA_FOLLOWING = "following";
+    private static final int TAB_FEED = 0;
+    private static final int TAB_VIDEOS = 1;
+    private static final int TAB_NEW = 2;
+    private static final int TAB_NOTIFICATIONS = 3;
+    private static final int TAB_ME = 4;
     private static final String PREFS = "app";
     private static final String PREF_NOTICE_SHOWN = "notice_shown_v1";
 
-    private FrameLayout root;
-    private WebView web;
-    private ProgressBar progress;
-    private View errorView;
-    private TextView errorTitle;
-    private TextView errorText;
-    private TextView errorDetail;
-    private FrameLayout fullscreen;
-
-    private View customView;
-    private WebChromeClient.CustomViewCallback customViewCallback;
-    private ValueCallback<Uri[]> filePathCallback;
-
-    /** True while the Twitch OAuth flow started from eblo.id is running inside the WebView. */
-    private boolean inLoginFlow;
-    private boolean mainFrameFailed;
-    private boolean offlineError;
-    private String failedUrl;
-
-    private ConnectivityManager.NetworkCallback networkCallback;
-    private Object backCallback;
-    private boolean backCallbackRegistered;
+    private FeedController feed;
+    private VideosController videos;
+    private NotificationsController notifications;
+    private FrameLayout meContainer;
+    private StateView meState;
+    private ProfileController me;
+    private String meLogin;
+    private final View[] pages = new View[5];
+    private final LinearLayout[] tabs = new LinearLayout[5];
+    private TextView unreadBadge;
+    private int currentTab = TAB_FEED;
+    private long lastSessionRefresh;
+    private final Runnable sessionListener = this::onSessionChanged;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        setContentView(R.layout.activity_main);
-        root = findViewById(R.id.root);
-        web = findViewById(R.id.web);
-        progress = findViewById(R.id.progress);
-        errorView = findViewById(R.id.error);
-        errorTitle = findViewById(R.id.error_title);
-        errorText = findViewById(R.id.error_text);
-        errorDetail = findViewById(R.id.error_detail);
-        fullscreen = findViewById(R.id.fullscreen);
-        findViewById(R.id.retry).setOnClickListener(v -> retry());
+        buildTopBar();
 
-        setUpWindowInsets();
-        setUpWebView();
-
-        if (savedInstanceState == null || web.restoreState(savedInstanceState) == null) {
-            loadInApp(startUrl(getIntent()));
+        FrameLayout content = new FrameLayout(this);
+        feed = new FeedController(this, new Api.FeedQuery(), true);
+        videos = new VideosController(this);
+        notifications = new NotificationsController(this, this::setUnread);
+        meContainer = new FrameLayout(this);
+        meState = new StateView(this);
+        meContainer.addView(meState, new FrameLayout.LayoutParams(-1, -1));
+        pages[TAB_FEED] = feed.view();
+        pages[TAB_VIDEOS] = videos.view();
+        pages[TAB_NOTIFICATIONS] = notifications.view();
+        pages[TAB_ME] = meContainer;
+        for (View p : pages) {
+            if (p == null) continue;
+            p.setVisibility(View.GONE);
+            content.addView(p, new FrameLayout.LayoutParams(-1, -1));
         }
+        page.addView(content, new LinearLayout.LayoutParams(-1, 0, 1f));
+        buildBottomBar();
+        selectTab(TAB_FEED);
+
+        Session.addListener(sessionListener);
+        refreshSession();
+        feed.reload(true);
+        handleIntent(getIntent());
         showNoticeOnce();
     }
 
@@ -113,537 +78,222 @@ public class MainActivity extends Activity {
     protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
         setIntent(intent);
-        if (web != null && Intent.ACTION_VIEW.equals(intent.getAction()) && intent.getData() != null) {
-            loadInApp(startUrl(intent));
-        }
+        handleIntent(intent);
     }
 
-    @Override
-    protected void onStart() {
-        super.onStart();
-        ConnectivityManager cm = getSystemService(ConnectivityManager.class);
-        if (cm == null) return;
-        networkCallback = new ConnectivityManager.NetworkCallback() {
-            @Override
-            public void onCapabilitiesChanged(Network network, NetworkCapabilities caps) {
-                if (!caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)) return;
-                runOnUiThread(() -> {
-                    if (offlineError && errorView.getVisibility() == View.VISIBLE) retry();
-                });
-            }
-        };
-        try {
-            cm.registerDefaultNetworkCallback(networkCallback);
-        } catch (RuntimeException e) {
-            networkCallback = null;
+    private void handleIntent(Intent intent) {
+        if (intent == null) return;
+        if (intent.getBooleanExtra(EXTRA_FOLLOWING, false)) {
+            selectTab(TAB_FEED);
+            feed.showFollowing(true);
         }
-    }
-
-    @Override
-    protected void onStop() {
-        super.onStop();
-        ConnectivityManager cm = getSystemService(ConnectivityManager.class);
-        if (cm != null && networkCallback != null) {
-            try {
-                cm.unregisterNetworkCallback(networkCallback);
-            } catch (RuntimeException ignored) {
-                // Already unregistered.
+        Uri data = intent.getData();
+        if (Intent.ACTION_VIEW.equals(intent.getAction()) && data != null) {
+            intent.setData(null);
+            String path = data.getPath() == null ? "/" : data.getPath();
+            if ("/".equals(path) && data.getQueryParameter("tag") == null) {
+                selectTab(TAB_FEED);
+                if ("following".equals(data.getQueryParameter("scope"))) feed.showFollowing(true);
+            } else if ("/videos".equals(path)) {
+                selectTab(TAB_VIDEOS);
+            } else {
+                Router.open(this, data);
             }
         }
-        networkCallback = null;
     }
 
     @Override
     protected void onResume() {
         super.onResume();
-        if (web != null) web.onResume();
-    }
-
-    @Override
-    protected void onPause() {
-        super.onPause();
-        if (web != null) web.onPause();
-        CookieManager.getInstance().flush();
-    }
-
-    @Override
-    protected void onSaveInstanceState(Bundle outState) {
-        super.onSaveInstanceState(outState);
-        if (web != null) web.saveState(outState);
+        // Picks up logins and logouts done in a web screen (for example on the "new post" page).
+        if (SystemClock.elapsedRealtime() - lastSessionRefresh > 30_000) refreshSession();
     }
 
     @Override
     protected void onDestroy() {
-        if (filePathCallback != null) {
-            filePathCallback.onReceiveValue(null);
-            filePathCallback = null;
-        }
-        if (web != null) {
-            root.removeView(web);
-            web.destroy();
-            web = null;
-        }
+        Session.removeListener(sessionListener);
         super.onDestroy();
     }
 
-    // ---- Window, keyboard and fullscreen ----
-
-    private void setUpWindowInsets() {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
-            // The window is not edge-to-edge here and adjustResize handles the keyboard.
-            return;
-        }
-        // Edge-to-edge is enforced on Android 15+, so the bars and the keyboard are applied as
-        // padding: the page never hides under the status bar, the navigation bar or the IME.
-        getWindow().setDecorFitsSystemWindows(false);
-        root.setOnApplyWindowInsetsListener((v, insets) -> {
-            if (customView != null) {
-                v.setPadding(0, 0, 0, 0);
-            } else {
-                Insets bars = insets.getInsets(
-                        WindowInsets.Type.systemBars() | WindowInsets.Type.displayCutout());
-                Insets ime = insets.getInsets(WindowInsets.Type.ime());
-                v.setPadding(bars.left, bars.top, bars.right, Math.max(bars.bottom, ime.bottom));
-            }
-            return WindowInsets.CONSUMED;
+    private void refreshSession() {
+        lastSessionRefresh = SystemClock.elapsedRealtime();
+        Session.refresh(() -> {
+            if (!alive()) return;
+            updateMeTab();
+            if (currentTab == TAB_ME) showMe();
+            pollUnread();
         });
     }
 
-    @SuppressWarnings("deprecation")
-    private void setSystemBarsHidden(boolean hidden) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            WindowInsetsController controller = getWindow().getInsetsController();
-            if (controller != null) {
-                if (hidden) {
-                    controller.setSystemBarsBehavior(
-                            WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
-                    controller.hide(WindowInsets.Type.systemBars());
-                } else {
-                    controller.show(WindowInsets.Type.systemBars());
-                }
-            }
-        } else {
-            getWindow().getDecorView().setSystemUiVisibility(hidden
-                    ? View.SYSTEM_UI_FLAG_FULLSCREEN
-                    | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
-                    | View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
-                    | View.SYSTEM_UI_FLAG_LAYOUT_STABLE
-                    | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
-                    | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
-                    : 0);
-        }
-        root.requestApplyInsets();
+    private void onSessionChanged() {
+        if (!alive()) return;
+        updateMeTab();
+        feed.onSessionChanged();
+        if (currentTab == TAB_NOTIFICATIONS) notifications.load(true);
+        if (currentTab == TAB_ME) showMe();
+        if (!Session.loggedIn()) setUnread(0);
     }
 
-    private void exitFullscreen() {
-        if (customView == null) return;
-        fullscreen.removeView(customView);
-        fullscreen.setVisibility(View.GONE);
-        customView = null;
-        WebChromeClient.CustomViewCallback callback = customViewCallback;
-        customViewCallback = null;
-        setSystemBarsHidden(false);
-        if (callback != null) callback.onCustomViewHidden();
+    private void pollUnread() {
+        if (!Session.loggedIn()) return;
+        Http.run(Api::notifications, (n, error) -> {
+            if (alive() && n != null && currentTab != TAB_NOTIFICATIONS) setUnread(n.unread);
+        });
+    }
+
+    // ---- chrome ----
+
+    private void buildTopBar() {
+        LinearLayout bar = Ui.row(this);
+        bar.setPadding(Ui.dp(4), 0, Ui.dp(4), 0);
+        ImageView logo = new ImageView(this);
+        logo.setImageResource(R.drawable.ic_launcher_foreground);
+        logo.setScaleType(ImageView.ScaleType.FIT_CENTER);
+        bar.addView(logo, new LinearLayout.LayoutParams(Ui.dp(54), Ui.dp(54)));
+        TextView title = Ui.text(this, "eblo.id", 30, Ui.ACCENT);
+        bar.addView(title, Ui.lpWeight());
+        logo.setOnClickListener(v -> selectTab(TAB_FEED));
+        title.setOnClickListener(v -> selectTab(TAB_FEED));
+        ImageView search = Ui.iconButton(this, R.drawable.ic_search, Ui.INK, "Поиск");
+        search.setOnClickListener(v -> SearchActivity.start(this, null));
+        bar.addView(search);
+        page.addView(bar, new LinearLayout.LayoutParams(-1, Ui.dp(56)));
+    }
+
+    private void buildBottomBar() {
+        page.addView(Ui.divider(this));
+        LinearLayout bar = Ui.row(this);
+        bar.setBackgroundColor(Ui.BG);
+        bar.setPadding(0, Ui.dp(4), 0, Ui.dp(4));
+        String[] labels = {"Лента", "Видосы", "", "Уведомления", "Войти"};
+        int[] icons = {R.drawable.ic_home, R.drawable.ic_play, R.drawable.ic_add, R.drawable.ic_bell, R.drawable.ic_person};
+        for (int i = 0; i < 5; i++) {
+            final int index = i;
+            LinearLayout tab = Ui.column(this);
+            tab.setGravity(Gravity.CENTER);
+            tab.setBackground(Ui.ripple(null));
+            tab.setContentDescription(i == TAB_NEW ? "Новый пост" : labels[i]);
+            if (i == TAB_NEW) {
+                ImageView plus = Ui.icon(this, icons[i], 30, 0xFF111111);
+                plus.setScaleType(ImageView.ScaleType.CENTER);
+                plus.setBackground(Ui.round(Ui.BRAND_LIGHT, 12, 0));
+                tab.addView(plus, new LinearLayout.LayoutParams(Ui.dp(54), Ui.dp(42)));
+            } else {
+                FrameLayout iconBox = new FrameLayout(this);
+                ImageView icon = Ui.icon(this, icons[i], 26, Ui.INK3);
+                iconBox.addView(icon, new FrameLayout.LayoutParams(Ui.dp(26), Ui.dp(26), Gravity.CENTER));
+                if (i == TAB_NOTIFICATIONS) {
+                    unreadBadge = Ui.text(this, 12, 0xFF111111);
+                    unreadBadge.setGravity(Gravity.CENTER);
+                    unreadBadge.setMinWidth(Ui.dp(18));
+                    unreadBadge.setPadding(Ui.dp(4), Ui.dp(1), Ui.dp(4), Ui.dp(1));
+                    unreadBadge.setBackground(Ui.round(Ui.BRAND_LIGHT, 9, 0));
+                    unreadBadge.setVisibility(View.GONE);
+                    iconBox.addView(unreadBadge, new FrameLayout.LayoutParams(-2, -2, Gravity.TOP | Gravity.END));
+                }
+                tab.addView(iconBox, new LinearLayout.LayoutParams(Ui.dp(40), Ui.dp(28)));
+                TextView label = Ui.text(this, labels[i], 13, Ui.INK3);
+                label.setGravity(Gravity.CENTER);
+                label.setSingleLine(true);
+                tab.addView(label);
+            }
+            tab.setOnClickListener(v -> selectTab(index));
+            tabs[i] = tab;
+            bar.addView(tab, new LinearLayout.LayoutParams(0, Ui.dp(56), 1f));
+        }
+        page.addView(bar, new LinearLayout.LayoutParams(-1, -2));
+    }
+
+    private void updateMeTab() {
+        TextView label = (TextView) tabs[TAB_ME].getChildAt(1);
+        label.setText(Session.loggedIn() ? "Профиль" : "Войти");
+    }
+
+    private void setUnread(int count) {
+        unreadBadge.setVisibility(count > 0 ? View.VISIBLE : View.GONE);
+        unreadBadge.setText(count > 99 ? "99+" : String.valueOf(count));
+    }
+
+    private void selectTab(int index) {
+        if (index == TAB_NEW) {
+            WebActivity.newPost(this);
+            return;
+        }
+        if (index == currentTab && pages[index].getVisibility() == View.VISIBLE) {
+            if (index == TAB_FEED) feed.scrollToTop();
+            if (index == TAB_ME && me != null) me.scrollToTop();
+            return;
+        }
+        currentTab = index;
+        for (int i = 0; i < pages.length; i++) {
+            if (pages[i] != null) pages[i].setVisibility(i == index ? View.VISIBLE : View.GONE);
+            if (i == TAB_NEW || tabs[i] == null) continue;
+            int color = i == index ? Ui.BRAND_LIGHT : Ui.INK3;
+            FrameLayout iconBox = (FrameLayout) tabs[i].getChildAt(0);
+            ((ImageView) iconBox.getChildAt(0)).setImageTintList(ColorStateList.valueOf(color));
+            ((TextView) tabs[i].getChildAt(1)).setTextColor(color);
+        }
+        if (index == TAB_VIDEOS) videos.ensureLoaded();
+        if (index == TAB_NOTIFICATIONS) {
+            notifications.load(true);
+            notifications.markSeen();
+        }
+        if (index == TAB_ME) showMe();
         updateBackCallback();
     }
 
-    // ---- WebView ----
-
-    @SuppressLint("SetJavaScriptEnabled")
-    private void setUpWebView() {
-        WebView.setWebContentsDebuggingEnabled(
-                (getApplicationInfo().flags & ApplicationInfo.FLAG_DEBUGGABLE) != 0);
-        web.setBackgroundColor(getColor(R.color.site_background));
-
-        WebSettings s = web.getSettings();
-        s.setJavaScriptEnabled(true);
-        s.setDomStorageEnabled(true);
-        s.setAllowFileAccess(false);
-        s.setJavaScriptCanOpenWindowsAutomatically(false);
-        s.setSupportMultipleWindows(false);
-        s.setMediaPlaybackRequiresUserGesture(true);
-        s.setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW);
-
-        CookieManager cookies = CookieManager.getInstance();
-        cookies.setAcceptCookie(true);
-        // Cloudflare Turnstile and YouTube embeds run in third-party frames.
-        cookies.setAcceptThirdPartyCookies(web, true);
-
-        web.setWebViewClient(new Client());
-        web.setWebChromeClient(new Chrome());
-        web.setDownloadListener(this::onDownload);
-    }
-
-    private final class Client extends WebViewClient {
-        @Override
-        public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
-            if (!request.isForMainFrame()) return false;
-            return route(request.getUrl());
+    private void showMe() {
+        if (!Session.known()) {
+            meState.loading();
+            return;
         }
-
-        @Override
-        public void onPageStarted(WebView view, String url, Bitmap favicon) {
-            mainFrameFailed = false;
-            Uri uri = Uri.parse(url);
-            if (isSiteUri(uri) && !isAuthPath(uri)) inLoginFlow = false;
-            progress.setProgress(0);
-            progress.setVisibility(View.VISIBLE);
-        }
-
-        @Override
-        public void onPageFinished(WebView view, String url) {
-            progress.setVisibility(View.GONE);
-            if (!mainFrameFailed) errorView.setVisibility(View.GONE);
-            CookieManager.getInstance().flush();
-            updateBackCallback();
-        }
-
-        @Override
-        public void doUpdateVisitedHistory(WebView view, String url, boolean isReload) {
-            updateBackCallback();
-        }
-
-        @Override
-        public void onReceivedError(WebView view, WebResourceRequest request, WebResourceError error) {
-            if (!request.isForMainFrame()) return;
-            mainFrameFailed = true;
-            showError(request.getUrl().toString(), error.getErrorCode(),
-                    String.valueOf(error.getDescription()));
-        }
-
-        @Override
-        @TargetApi(Build.VERSION_CODES.O)
-        public boolean onRenderProcessGone(WebView view, RenderProcessGoneDetail detail) {
-            // The page renderer crashed or was killed for memory: rebuild the screen instead of
-            // letting the whole app crash.
-            if (view == web) {
-                root.removeView(web);
-                web.destroy();
-                web = null;
-                recreate();
+        if (!Session.loggedIn()) {
+            if (me != null) {
+                meContainer.removeView(me.view());
+                me = null;
+                meLogin = null;
             }
-            return true;
+            meState.loginPrompt("Добро пожаловать",
+                    "Войдите через Twitch, чтобы публиковать посты, комментировать, ставить оценки и подписываться.",
+                    () -> WebActivity.login(this));
+            return;
+        }
+        meState.hide();
+        String login = Session.login();
+        if (me == null || !login.equals(meLogin)) {
+            if (me != null) meContainer.removeView(me.view());
+            me = new ProfileController(this, login);
+            me.setOnLoggedOut(() -> {
+                updateMeTab();
+                showMe();
+            });
+            meLogin = login;
+            meContainer.addView(me.view(), 0, new FrameLayout.LayoutParams(-1, -1));
+            me.load(true);
         }
     }
 
-    private final class Chrome extends WebChromeClient {
-        @Override
-        public void onProgressChanged(WebView view, int newProgress) {
-            progress.setProgress(newProgress);
-            if (newProgress >= 100) progress.setVisibility(View.GONE);
-        }
+    // ---- Back: other tabs return to the feed first ----
 
-        @Override
-        public boolean onShowFileChooser(WebView view, ValueCallback<Uri[]> callback,
-                                         FileChooserParams params) {
-            if (filePathCallback != null) filePathCallback.onReceiveValue(null);
-            filePathCallback = callback;
-
-            Intent intent = new Intent(Intent.ACTION_GET_CONTENT);
-            intent.addCategory(Intent.CATEGORY_OPENABLE);
-            String[] mimeTypes = mimeTypesFor(params.getAcceptTypes());
-            if (mimeTypes.length == 1) {
-                intent.setType(mimeTypes[0]);
-            } else {
-                intent.setType("*/*");
-                intent.putExtra(Intent.EXTRA_MIME_TYPES, mimeTypes);
-            }
-            if (params.getMode() == FileChooserParams.MODE_OPEN_MULTIPLE) {
-                intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
-            }
-            try {
-                startActivityForResult(intent, REQUEST_FILES);
-                return true;
-            } catch (ActivityNotFoundException e) {
-                filePathCallback = null;
-                toast(getString(R.string.no_file_picker));
-                return false;
-            }
-        }
-
-        @Override
-        public void onShowCustomView(View view, CustomViewCallback callback) {
-            if (customView != null) {
-                callback.onCustomViewHidden();
-                return;
-            }
-            customView = view;
-            customViewCallback = callback;
-            fullscreen.addView(view, new FrameLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
-            fullscreen.setVisibility(View.VISIBLE);
-            setSystemBarsHidden(true);
-            updateBackCallback();
-        }
-
-        @Override
-        public void onHideCustomView() {
-            exitFullscreen();
-        }
+    @Override
+    protected boolean wantsBack() {
+        return currentTab != TAB_FEED;
     }
 
     @Override
-    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
-        super.onActivityResult(requestCode, resultCode, data);
-        if (requestCode != REQUEST_FILES || filePathCallback == null) return;
-        List<Uri> picked = new ArrayList<>();
-        if (resultCode == RESULT_OK && data != null) {
-            ClipData clip = data.getClipData();
-            if (clip != null && clip.getItemCount() > 0) {
-                for (int i = 0; i < clip.getItemCount(); i++) {
-                    Uri uri = clip.getItemAt(i).getUri();
-                    if (uri != null) picked.add(uri);
-                }
-            } else if (data.getData() != null) {
-                picked.add(data.getData());
-            }
-        }
-        filePathCallback.onReceiveValue(picked.isEmpty() ? null : picked.toArray(new Uri[0]));
-        filePathCallback = null;
-    }
-
-    /**
-     * Maps the input's accept list to MIME types for the system picker. Anything that is not
-     * purely image/video/audio opens the picker for all files, because document providers often
-     * report archives and documents with generic types; the site validates the files itself.
-     */
-    static String[] mimeTypesFor(String[] acceptTypes) {
-        Set<String> result = new LinkedHashSet<>();
-        if (acceptTypes != null) {
-            for (String entry : acceptTypes) {
-                if (entry == null) continue;
-                for (String raw : entry.split(",")) {
-                    String type = raw.trim().toLowerCase(Locale.ROOT);
-                    if (type.isEmpty()) continue;
-                    String mime = type.startsWith(".")
-                            ? MimeTypeMap.getSingleton().getMimeTypeFromExtension(type.substring(1))
-                            : type;
-                    if (mime == null || !(mime.startsWith("image/") || mime.startsWith("video/")
-                            || mime.startsWith("audio/"))) {
-                        return new String[] {"*/*"};
-                    }
-                    result.add(mime);
-                }
-            }
-        }
-        return result.isEmpty() ? new String[] {"*/*"} : result.toArray(new String[0]);
-    }
-
-    // ---- Navigation ----
-
-    private String startUrl(Intent intent) {
-        Uri data = intent != null ? intent.getData() : null;
-        if (data != null && "https".equals(lower(data.getScheme())) && isSiteUri(data)) {
-            return data.toString();
-        }
-        return HOME_URL;
-    }
-
-    /** Returns true when the navigation was handled outside of the WebView. */
-    private boolean route(Uri uri) {
-        String scheme = lower(uri.getScheme());
-        if ("https".equals(scheme) || "http".equals(scheme)) {
-            if (isSiteUri(uri)) {
-                if ("http".equals(scheme)) {
-                    loadInApp(uri.buildUpon().scheme("https").build().toString());
-                    return true;
-                }
-                inLoginFlow = isAuthPath(uri);
-                return false;
-            }
-            if (inLoginFlow && isTwitchUri(uri)) return false;
-            openExternally(uri);
-            return true;
-        }
-        if ("intent".equals(scheme)) {
-            openIntentUri(uri.toString());
-            return true;
-        }
-        if ("about".equals(scheme) || "data".equals(scheme) || "blob".equals(scheme)
-                || "javascript".equals(scheme)) {
-            return false;
-        }
-        openExternally(uri); // mailto:, tg:, tel:, market: and other apps
-        return true;
-    }
-
-    /**
-     * Loads a URL that did not come from a click in the page (start, deep link, retry).
-     * Login must finish in this WebView: Twitch redirects back to eblo.id, and the session
-     * cookie has to land in this cookie jar, not in an external browser. So an eblo.id
-     * login URL starts the flow, any other eblo.id URL ends it, and other hosts keep it as is.
-     */
-    private void loadInApp(String url) {
-        Uri uri = Uri.parse(url);
-        if (isSiteUri(uri)) inLoginFlow = isAuthPath(uri);
-        web.loadUrl(url);
-    }
-
-    private static boolean isSiteUri(Uri uri) {
-        String host = lower(uri.getHost());
-        return host.equals(SITE_HOST) || host.endsWith("." + SITE_HOST);
-    }
-
-    private static boolean isAuthPath(Uri uri) {
-        String path = uri.getPath() == null ? "" : uri.getPath();
-        return path.startsWith("/login/") || path.startsWith("/auth/");
-    }
-
-    private static boolean isTwitchUri(Uri uri) {
-        String host = lower(uri.getHost());
-        return host.equals("twitch.tv") || host.endsWith(".twitch.tv");
-    }
-
-    private void openExternally(Uri uri) {
-        Intent intent = new Intent(Intent.ACTION_VIEW, uri);
-        intent.addCategory(Intent.CATEGORY_BROWSABLE);
-        try {
-            startActivity(intent);
-        } catch (ActivityNotFoundException e) {
-            toast(getString(R.string.no_app_for_link));
-        }
-    }
-
-    private void openIntentUri(String url) {
-        try {
-            Intent intent = Intent.parseUri(url, Intent.URI_INTENT_SCHEME);
-            intent.addCategory(Intent.CATEGORY_BROWSABLE);
-            intent.setComponent(null);
-            intent.setSelector(null);
-            try {
-                startActivity(intent);
-                return;
-            } catch (ActivityNotFoundException ignored) {
-                // Fall back to the page's own browser URL below.
-            }
-            String fallback = intent.getStringExtra("browser_fallback_url");
-            if (fallback != null) {
-                Uri fallbackUri = Uri.parse(fallback);
-                String scheme = lower(fallbackUri.getScheme());
-                if ("https".equals(scheme) || "http".equals(scheme)) {
-                    if (!route(fallbackUri)) loadInApp(fallback);
-                    return;
-                }
-            }
-        } catch (URISyntaxException ignored) {
-            // Malformed intent: URL.
-        }
-        toast(getString(R.string.no_app_for_link));
-    }
-
-    // ---- Back ----
-
-    private boolean handleBack() {
-        if (customView != null) {
-            exitFullscreen();
-            return true;
-        }
-        if (web != null && web.canGoBack()) {
-            web.goBack();
+    protected boolean handleBack() {
+        if (currentTab != TAB_FEED) {
+            selectTab(TAB_FEED);
             return true;
         }
         return false;
     }
 
-    /** Android 13+: intercept Back only while there is somewhere to go back to in the app. */
-    private void updateBackCallback() {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return;
-        boolean needed = customView != null || (web != null && web.canGoBack());
-        if (needed == backCallbackRegistered) return;
-        updateBackCallbackApi33(needed);
-    }
-
-    @TargetApi(Build.VERSION_CODES.TIRAMISU)
-    private void updateBackCallbackApi33(boolean needed) {
-        if (backCallback == null) {
-            backCallback = (OnBackInvokedCallback) () -> {
-                if (!handleBack()) moveTaskToBack(true);
-                updateBackCallback();
-            };
-        }
-        OnBackInvokedDispatcher dispatcher = getOnBackInvokedDispatcher();
-        if (needed) {
-            dispatcher.registerOnBackInvokedCallback(
-                    OnBackInvokedDispatcher.PRIORITY_DEFAULT, (OnBackInvokedCallback) backCallback);
-        } else {
-            dispatcher.unregisterOnBackInvokedCallback((OnBackInvokedCallback) backCallback);
-        }
-        backCallbackRegistered = needed;
-    }
-
     @Override
-    @SuppressWarnings("deprecation")
-    public void onBackPressed() {
-        // Android 12 and older; newer versions use the OnBackInvokedCallback above.
-        if (!handleBack()) super.onBackPressed();
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode == WebActivity.REQUEST_LOGIN) onSessionChanged();
     }
-
-    // ---- Errors and offline ----
-
-    private void showError(String url, int code, String description) {
-        failedUrl = url;
-        offlineError = !isOnline();
-        errorTitle.setText(offlineError ? R.string.error_offline_title : R.string.error_generic_title);
-        errorText.setText(offlineError ? R.string.error_offline_text : R.string.error_generic_text);
-        errorDetail.setText(description);
-        errorView.setVisibility(View.VISIBLE);
-        progress.setVisibility(View.GONE);
-    }
-
-    private void retry() {
-        if (web == null) return;
-        // The error screen stays up (with the progress bar over it) until the page loads.
-        if (failedUrl != null) {
-            loadInApp(failedUrl);
-        } else {
-            web.reload();
-        }
-    }
-
-    private boolean isOnline() {
-        ConnectivityManager cm = getSystemService(ConnectivityManager.class);
-        if (cm == null) return true;
-        Network network = cm.getActiveNetwork();
-        if (network == null) return false;
-        NetworkCapabilities caps = cm.getNetworkCapabilities(network);
-        return caps != null && caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET);
-    }
-
-    // ---- Downloads ----
-
-    private void onDownload(String url, String userAgent, String contentDisposition,
-                            String mimeType, long contentLength) {
-        Uri uri = Uri.parse(url);
-        String scheme = lower(uri.getScheme());
-        if (!"https".equals(scheme) && !"http".equals(scheme)) {
-            toast(getString(R.string.download_unsupported));
-            return;
-        }
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
-            // Saving to the public Downloads folder needs a storage permission before Android 10.
-            openExternally(uri);
-            return;
-        }
-        String fileName = URLUtil.guessFileName(url, contentDisposition, mimeType);
-        try {
-            DownloadManager.Request request = new DownloadManager.Request(uri);
-            String cookie = CookieManager.getInstance().getCookie(url);
-            if (cookie != null) request.addRequestHeader("Cookie", cookie);
-            if (userAgent != null) request.addRequestHeader("User-Agent", userAgent);
-            if (mimeType != null && !mimeType.isEmpty()) request.setMimeType(mimeType);
-            request.setTitle(fileName);
-            request.setNotificationVisibility(
-                    DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED);
-            request.setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, fileName);
-            DownloadManager dm = getSystemService(DownloadManager.class);
-            dm.enqueue(request);
-            toast(getString(R.string.download_started, fileName));
-        } catch (RuntimeException e) {
-            toast(getString(R.string.download_failed));
-        }
-    }
-
-    // ---- Misc ----
 
     private void showNoticeOnce() {
         SharedPreferences prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
@@ -655,13 +305,5 @@ public class MainActivity extends Activity {
                 .setPositiveButton(R.string.notice_ok, (dialog, which) ->
                         prefs.edit().putBoolean(PREF_NOTICE_SHOWN, true).apply())
                 .show();
-    }
-
-    private void toast(String text) {
-        Toast.makeText(this, text, Toast.LENGTH_SHORT).show();
-    }
-
-    private static String lower(String s) {
-        return s == null ? "" : s.toLowerCase(Locale.ROOT);
     }
 }

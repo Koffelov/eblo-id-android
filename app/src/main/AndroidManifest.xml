@@ -5,6 +5,7 @@
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
     <application
+        android:name=".App"
         android:allowBackup="false"
         android:fullBackupContent="false"
         android:icon="@drawable/ic_launcher"
@@ -35,5 +36,28 @@
                 <data android:host="eblo.id" />
             </intent-filter>
         </activity>
+
+        <activity
+            android:name=".PostActivity"
+            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboard|keyboardHidden|navigation|uiMode"
+            android:windowSoftInputMode="adjustResize" />
+        <activity
+            android:name=".ProfileActivity"
+            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboard|keyboardHidden|navigation|uiMode" />
+        <activity
+            android:name=".FeedActivity"
+            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboard|keyboardHidden|navigation|uiMode" />
+        <activity
+            android:name=".SearchActivity"
+            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboard|keyboardHidden|navigation|uiMode"
+            android:windowSoftInputMode="adjustResize|stateVisible" />
+        <activity
+            android:name=".WebActivity"
+            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboard|keyboardHidden|navigation|uiMode"
+            android:windowSoftInputMode="adjustResize" />
+        <activity
+            android:name=".MediaActivity"
+            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboard|keyboardHidden|navigation|uiMode"
+            android:theme="@style/AppTheme.Media" />
     </application>
 </manifest>

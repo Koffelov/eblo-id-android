@@ -8,4 +8,10 @@
         <item name="android:statusBarColor">@color/site_background</item>
         <item name="android:navigationBarColor">@color/site_background</item>
     </style>
+
+    <style name="AppTheme.Media">
+        <item name="android:windowBackground">@android:color/black</item>
+        <item name="android:statusBarColor">@android:color/black</item>
+        <item name="android:navigationBarColor">@android:color/black</item>
+    </style>
 </resources>

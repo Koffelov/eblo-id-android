@@ -1,8 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- Taken from the site: body/header/tab bar background and the accent green of the logo -->
+    <!-- From the site: page background and the accent green of the logo -->
     <color name="site_background">#FF202020</color>
-    <color name="site_accent">#FF86BE08</color>
-    <color name="text_primary">#FFF2F2F2</color>
-    <color name="text_secondary">#FFB6C6E3</color>
+    <color name="site_accent">#FF9AC43E</color>
 </resources>

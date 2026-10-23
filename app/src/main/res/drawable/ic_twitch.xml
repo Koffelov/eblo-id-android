@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Material Design icon (Apache License 2.0) -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp" android:height="24dp"
+    android:viewportWidth="24" android:viewportHeight="24">
+    <path android:fillColor="#FFFFFFFF" android:pathData="M4.3,3L3,6.4v13.8h4.7V23h2.6l2.6,-2.8h3.9l5.2,-5.2V3H4.3zM20.2,14.1l-3,3h-4.7l-2.6,2.6v-2.6H5.9V4.8h14.3V14.1zM17.6,8.1v5.2h-1.8V8.1H17.6zM12.8,8.1v5.2H11V8.1H12.8z" />
+</vector>
