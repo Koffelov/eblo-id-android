@@ -35,7 +35,7 @@
 
 ## Установка на Android
 
-1. На телефоне откройте [Releases](https://github.com/Koffelov/eblo-id-android/releases/latest) (репозиторий приватный — войдите в GitHub в браузере телефона) и скачайте `eblo-id-<версия>.apk`.
+1. На телефоне откройте [Releases](https://github.com/Koffelov/eblo-id-android/releases/latest) и скачайте `eblo-id-<версия>.apk`.
 2. Откройте файл. Если Android спросит — разрешите «Установка неизвестных приложений» для браузера/файлового менеджера.
 3. Запустите «eblo.id (неоф.)» → вкладка «Войти» → «Войти через Twitch».
 
