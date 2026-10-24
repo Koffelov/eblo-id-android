@@ -60,10 +60,12 @@ back() { adb shell input keyevent KEYCODE_BACK; sleep "${1:-3}"; }
 main() { adb shell am start -W -n "$1/$PKG.MainActivity" >/dev/null; sleep 2; }
 js() { python3 "$HERE/cdp.py" "$@"; }
 cdp_forward() {
-  local sock
+  # The debug app's own DevTools socket (other apps on the image can have WebViews too).
+  local sock pid
   for _ in $(seq 1 30); do
-    sock="$(adb shell grep -a -o 'webview_devtools_remote_[0-9]*' /proc/net/unix | tr -d '\r' | head -1)"
-    [ -n "$sock" ] && break
+    pid="$(adb shell pidof "$DBG" | tr -d '\r' | awk '{print $1}')"
+    sock="$(adb shell grep -a -o "webview_devtools_remote_$pid\$" /proc/net/unix | tr -d '\r' | head -1)"
+    [ -n "$pid" ] && [ -n "$sock" ] && break
     sleep 1
   done
   adb forward --remove-all
@@ -147,26 +149,39 @@ if [ -n "$VIDEO_CODE" ]; then
   snap a08-video-post
   check "video post shows the app's player" has a08-video-post "Воспроизвести"
   tap a08-video-post "Воспроизвести"
-  sleep 3
-  anr_guard
-  dump a09-tmp
-  # A tap on the video shows the controls (and keeps them up).
-  xy="$(python3 "$HERE/ui.py" findstart "$OUT/a09-tmp.xml" "Видео ")" && adb shell input tap $xy
-  sleep 1
-  snap a09-video-playing
-  check "inline video plays (pause control shown)" has a09-video-playing "Пауза"
-  t1="$(python3 "$HERE/ui.py" match "$OUT/a09-video-playing.xml" '[0-9]+:[0-9]{2} / [0-9]+:[0-9]{2}' || true)"
-  sleep 2
-  dump a09-later
-  t2="$(python3 "$HERE/ui.py" match "$OUT/a09-later.xml" '[0-9]+:[0-9]{2} / [0-9]+:[0-9]{2}' || true)"
-  log "player time: '$t1' -> '$t2'"
-  check "inline video time advances" bash -c "[ -n '$t1' ] && [ -n '$t2' ] && [ '$t1' != '$t2' ]"
-  tap a09-later "На весь экран" || tap a09-video-playing "На весь экран"
+  # The CI emulator has no audio device, so video runs faster than real time and a short clip can
+  # end within seconds. Pass when the player shows a position past 0:00 (playing or finished).
+  played=""
+  for i in 1 2 3 4 5 6 7 8; do
+    sleep 1
+    anr_guard
+    dump "a09-poll-$i"
+    if ! has "a09-poll-$i" "На весь экран"; then
+      xy="$(python3 "$HERE/ui.py" findstart "$OUT/a09-poll-$i.xml" "Видео ")" && adb shell input tap $xy
+      sleep 1
+      dump "a09-poll-$i"
+    fi
+    t="$(python3 "$HERE/ui.py" match "$OUT/a09-poll-$i.xml" '[0-9]+:[0-9]{2} / [0-9]+:[0-9]{2}' || true)"
+    log "player poll $i: '$t' pause=$(has "a09-poll-$i" 'Пауза' && echo yes || echo no)"
+    case "$t" in ""|"0:00 /"*) ;; *) played="$t"; break ;; esac
+  done
+  shot a09-video-playing
+  cp "$OUT/a09-poll-$i.xml" "$OUT/a09-video-playing.xml"
+  check "inline video loads and plays (position: ${played:-none})" test -n "$played"
+  if ! has a09-video-playing "На весь экран"; then
+    xy="$(python3 "$HERE/ui.py" findstart "$OUT/a09-video-playing.xml" "Видео ")" && adb shell input tap $xy
+    sleep 1
+    dump a09-video-playing
+  fi
+  tap a09-video-playing "На весь экран"
   sleep 6
   anr_guard
-  # The controls auto-hide while playing; a tap in the middle brings them back.
-  adb shell input tap $(adb shell wm size | grep -oE '[0-9]+x[0-9]+' | tail -1 | awk -Fx '{print int($1/2), int($2/2)}')
-  sleep 1
+  dump a10-video-fullscreen
+  if ! has a10-video-fullscreen "Свернуть"; then
+    # Controls auto-hide while playing; a tap in the middle brings them back.
+    adb shell input tap $(adb shell wm size | grep -oE '[0-9]+x[0-9]+' | tail -1 | awk -Fx '{print int($1/2), int($2/2)}')
+    sleep 1
+  fi
   snap a10-video-fullscreen
   check "fullscreen player opens" focused_on "MediaActivity"
   check "fullscreen player shows its controls" has a10-video-fullscreen "Свернуть"
@@ -221,7 +236,7 @@ if tap a18-picker "smoke-test.txt"; then
   sleep 5
   snap a19-attached
   check "picked file appears in the new post" bash -c "python3 '$HERE/ui.py' has '$OUT/a19-attached.xml' 'smoke-test.txt' && python3 '$HERE/ui.py' has '$OUT/a19-attached.xml' '1 из 10'"
-  tapsub a19-attached "Опубликовать"
+  tap a19-attached "Опубликовать"
   sleep 3
   snap a20-publish-guest
   check "publishing as a guest asks to log in (nothing is posted)" has a20-publish-guest "Нужен вход"
@@ -237,9 +252,13 @@ sleep 2
 
 log "Offline"
 adb shell cmd connectivity airplane-mode enable
-sleep 8
+for _ in $(seq 1 20); do
+  adb shell ping -c 1 -W 1 8.8.8.8 >/dev/null 2>&1 || break
+  sleep 1
+done
+sleep 2
 open_url "$PKG" "https://eblo.id/$CODE"
-sleep 6
+sleep 8
 snap a22-offline
 check "offline: clear message and retry" bash -c "python3 '$HERE/ui.py' has '$OUT/a22-offline.xml' 'Нет подключения к интернету' && python3 '$HERE/ui.py' has '$OUT/a22-offline.xml' 'Повторить'"
 adb shell cmd connectivity airplane-mode disable
