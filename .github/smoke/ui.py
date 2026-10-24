@@ -26,6 +26,15 @@ def centre(node):
 
 
 cmd, path, text = sys.argv[1], sys.argv[2], sys.argv[3].strip().lower()
+if cmd == "match":
+    # print the first text/content-desc that fully matches the regex
+    rx = re.compile(sys.argv[3])
+    for n in nodes(path):
+        for l in labels(n):
+            if rx.fullmatch(l):
+                print(l)
+                sys.exit(0)
+    sys.exit(1)
 if cmd == "findstart":
     # content-desc / text that starts with the raw (unstripped) prefix
     prefix = sys.argv[3].lower()

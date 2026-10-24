@@ -240,6 +240,27 @@ final class VideoPlayer extends FrameLayout {
         if (prepared) video.seekTo(positionMs);
     }
 
+    /**
+     * Frees the decoder but keeps the position; the next play() reloads the stream from there.
+     * Used before the fullscreen player opens, so two decoders never run at once (phones have
+     * a limited number of hardware decoders).
+     */
+    void unload() {
+        if (!loaded) return;
+        startAt = position();
+        removeCallbacks(ticker);
+        removeCallbacks(hideControls);
+        video.stopPlayback();
+        loaded = false;
+        prepared = false;
+        completed = false;
+        player = null;
+        poster.setVisibility(VISIBLE);
+        buffering.setVisibility(GONE);
+        controls.setVisibility(GONE);
+        updateButtons();
+    }
+
     int position() {
         return prepared ? video.getCurrentPosition() : startAt;
     }

@@ -27,7 +27,27 @@ dump() {
   adb shell uiautomator dump /sdcard/ui.xml >/dev/null 2>&1
   adb pull /sdcard/ui.xml "$OUT/$1.xml" >/dev/null 2>&1 || : > "$OUT/$1.xml"
 }
-snap() { dump "$1"; shot "$1"; }
+APP_ANR=0
+SYSTEM_ANR=0
+# Emulators on CI decode video in software and the Android "system" process sometimes stops
+# responding. Dismiss that dialog ("Wait") so it doesn't hide the app; an ANR of the app itself
+# is recorded and fails the run.
+anr_guard() {
+  local f
+  f="$(adb shell dumpsys window | grep -m1 'mCurrentFocus')"
+  case "$f" in
+    *"Application Not Responding: $PKG"*|*"Application Not Responding: $DBG"*)
+      APP_ANR=$((APP_ANR + 1)); log "APP ANR: $f" ;;
+    *"Application Not Responding"*)
+      SYSTEM_ANR=$((SYSTEM_ANR + 1)); log "emulator system ANR dialog dismissed: $f" ;;
+    *) return 0 ;;
+  esac
+  dump anr
+  shot "anr-$APP_ANR-$SYSTEM_ANR"
+  tap anr "Wait" || adb shell input keyevent KEYCODE_BACK
+  sleep 2
+}
+snap() { anr_guard; dump "$1"; shot "$1"; }
 has() { python3 "$HERE/ui.py" has "$OUT/$1.xml" "$2"; }
 lacks() { ! has "$@"; }
 tap() { local xy; xy="$(python3 "$HERE/ui.py" find "$OUT/$1.xml" "$2")" || return 1; adb shell input tap $xy; }
@@ -76,6 +96,9 @@ if [ -z "$CODE" ] || [ -z "$FEED_TITLE" ]; then
   log "Could not get test data from eblo.id: $(printf '%s' "$FEED_JSON" | head -c 300)"
   exit 1
 fi
+# Big log buffers, so an ANR early in the run is still in logcat at the end.
+adb logcat -G 16M >/dev/null 2>&1 || true
+adb logcat -c || true
 adb shell 'echo "smoke test" > /sdcard/Download/smoke-test.txt'
 adb shell am broadcast -a android.intent.action.MEDIA_SCANNER_SCAN_FILE -d file:///sdcard/Download/smoke-test.txt >/dev/null
 
@@ -124,18 +147,34 @@ if [ -n "$VIDEO_CODE" ]; then
   snap a08-video-post
   check "video post shows the app's player" has a08-video-post "Воспроизвести"
   tap a08-video-post "Воспроизвести"
-  sleep 10
+  sleep 3
+  anr_guard
   dump a09-tmp
+  # A tap on the video shows the controls (and keeps them up).
   xy="$(python3 "$HERE/ui.py" findstart "$OUT/a09-tmp.xml" "Видео ")" && adb shell input tap $xy
   sleep 1
   snap a09-video-playing
   check "inline video plays (pause control shown)" has a09-video-playing "Пауза"
-  tap a09-video-playing "На весь экран"
+  t1="$(python3 "$HERE/ui.py" match "$OUT/a09-video-playing.xml" '[0-9]+:[0-9]{2} / [0-9]+:[0-9]{2}' || true)"
+  sleep 2
+  dump a09-later
+  t2="$(python3 "$HERE/ui.py" match "$OUT/a09-later.xml" '[0-9]+:[0-9]{2} / [0-9]+:[0-9]{2}' || true)"
+  log "player time: '$t1' -> '$t2'"
+  check "inline video time advances" bash -c "[ -n '$t1' ] && [ -n '$t2' ] && [ '$t1' != '$t2' ]"
+  tap a09-later "На весь экран" || tap a09-video-playing "На весь экран"
   sleep 6
+  anr_guard
+  # The controls auto-hide while playing; a tap in the middle brings them back.
+  adb shell input tap $(adb shell wm size | grep -oE '[0-9]+x[0-9]+' | tail -1 | awk -Fx '{print int($1/2), int($2/2)}')
+  sleep 1
   snap a10-video-fullscreen
   check "fullscreen player opens" focused_on "MediaActivity"
+  check "fullscreen player shows its controls" has a10-video-fullscreen "Свернуть"
   back 3
+  anr_guard
+  snap a11-after-fullscreen
   check "Back from fullscreen returns to the post" focused_on "PostActivity"
+  check "inline player released its decoder while fullscreen (play button back)" has a11-after-fullscreen "Воспроизвести"
 fi
 
 log "Search"
@@ -253,6 +292,9 @@ check "debug: session cookie survives force-stop and relaunch" has_session_cooki
 # ---- crashes ----
 adb logcat -d > "$OUT/logcat.txt"
 check "no app crash in logcat" bash -c "! grep -E 'FATAL EXCEPTION' -A3 '$OUT/logcat.txt' | grep -q 'koffelov'"
+grep -E 'ANR in ' "$OUT/logcat.txt" | tee -a "$OUT/log.txt" || true
+check "the app itself never stopped responding (ANR)" bash -c "[ $APP_ANR -eq 0 ] && ! grep -qE 'ANR in io\.github\.koffelov' '$OUT/logcat.txt'"
+log "emulator system ANR dialogs dismissed: $SYSTEM_ANR"
 
 echo
 cat "$OUT/summary.txt"

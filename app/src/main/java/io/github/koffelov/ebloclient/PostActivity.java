@@ -319,6 +319,7 @@ public class PostActivity extends BaseActivity {
                 @Override
                 public void onFullscreen(int positionMs) {
                     fullscreenPlayer = self[0];
+                    self[0].unload();
                     MediaActivity.video(PostActivity.this, m.url, poster, post.title, positionMs);
                 }
 
