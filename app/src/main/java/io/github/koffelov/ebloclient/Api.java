@@ -66,7 +66,7 @@ final class Api {
         return parse(Http.request("POST", path, "application/json", bytes));
     }
 
-    private static JSONObject parse(Http.Response r) throws IOException, JSONException {
+    static JSONObject parse(Http.Response r) throws IOException, JSONException {
         // The uploader asks for "status tunnelling": the real status comes in X-Origin-Status.
         int code = r.code;
         String tunnelled = r.header("X-Origin-Status");
@@ -220,8 +220,12 @@ final class Api {
         Http.Response r = Http.get("/@" + enc(login));
         if (r.code == 404) throw new ApiException(404, "Пользователь не найден", false);
         if (r.code >= 400) throw new ApiException(r.code, null, false);
-        String html = r.body;
-        Session.update(html);
+        Session.update(r.body);
+        return parseProfile(login, r.body);
+    }
+
+    /** Reads the profile header out of the /@login page HTML. */
+    static Models.Profile parseProfile(String login, String html) {
         Models.Profile p = new Models.Profile();
         p.login = login;
         p.name = group(NAME, html, login).trim();

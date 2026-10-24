@@ -58,6 +58,17 @@ jobs:
           gradle-version: ${{ env.GRADLE_VERSION }}
           cache-provider: basic
 
+      - name: Unit tests (JUnit + Mockito)
+        run: gradle --no-daemon testDebugUnitTest
+
+      - name: Upload test report
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: unit-test-report
+          path: app/build/reports/tests/testDebugUnitTest
+          retention-days: 7
+
       - name: Build debug APK
         run: gradle --no-daemon --stacktrace assembleDebug
 
