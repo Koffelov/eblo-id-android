@@ -46,6 +46,7 @@ final class VideoPlayer extends FrameLayout {
     private boolean prepared;
     private boolean completed;
     private boolean dragging;
+    private boolean wantPlay;
     private int startAt;
     private final Runnable ticker = new Runnable() {
         @Override
@@ -191,15 +192,26 @@ final class VideoPlayer extends FrameLayout {
                 return false;
             });
             if (startAt > 0) video.seekTo(startAt);
-            play();
+            // VideoView also re-prepares by itself when its surface comes back (returning to the
+            // app, scrolling back to the post); only start if the user had asked to play.
+            if (wantPlay) {
+                play();
+            } else {
+                poster.setVisibility(VISIBLE);
+                updateButtons();
+            }
         });
         video.setOnCompletionListener(mp -> {
             completed = true;
+            wantPlay = false;
+            startAt = 0;
             updateButtons();
             setControlsVisible(true);
         });
         video.setOnErrorListener((mp, what, extra) -> {
             buffering.setVisibility(GONE);
+            // Back to the initial state, so a tap on play retries.
+            forget();
             Ui.toast(getContext(), "Не удалось воспроизвести видео");
             return true;
         });
@@ -207,6 +219,7 @@ final class VideoPlayer extends FrameLayout {
 
     /** Starts playing (loads the stream on first use). */
     void play() {
+        wantPlay = true;
         if (!loaded) {
             loaded = true;
             buffering.setVisibility(VISIBLE);
@@ -230,7 +243,11 @@ final class VideoPlayer extends FrameLayout {
     }
 
     void pause() {
-        if (prepared && video.isPlaying()) video.pause();
+        wantPlay = false;
+        if (prepared && video.isPlaying()) {
+            video.pause();
+            startAt = video.getCurrentPosition();
+        }
         updateButtons();
         setControlsVisible(loaded);
     }
@@ -248,16 +265,8 @@ final class VideoPlayer extends FrameLayout {
     void unload() {
         if (!loaded) return;
         startAt = position();
-        removeCallbacks(ticker);
-        removeCallbacks(hideControls);
-        video.stopPlayback();
-        loaded = false;
-        prepared = false;
-        completed = false;
-        player = null;
+        forget();
         poster.setVisibility(VISIBLE);
-        buffering.setVisibility(GONE);
-        controls.setVisibility(GONE);
         updateButtons();
     }
 
@@ -266,9 +275,26 @@ final class VideoPlayer extends FrameLayout {
     }
 
     void release() {
+        forget();
+    }
+
+    /**
+     * Stops and releases the MediaPlayer and clears VideoView's URI. Without clearing it,
+     * VideoView opens the stream again on its own when its surface is recreated, e.g. while the
+     * fullscreen player is still closing — a second decoder that can fail and crash VideoView.
+     */
+    private void forget() {
+        wantPlay = false;
         removeCallbacks(ticker);
         removeCallbacks(hideControls);
         video.stopPlayback();
+        video.setVideoURI(null);
+        loaded = false;
+        prepared = false;
+        completed = false;
+        player = null;
+        buffering.setVisibility(GONE);
+        controls.setVisibility(GONE);
     }
 
     private void toggle() {
